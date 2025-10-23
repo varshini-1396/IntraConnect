@@ -1,0 +1,3 @@
+[console_scripts]
+lan-client = client.client:main
+lan-server = server.server:main

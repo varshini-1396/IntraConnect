@@ -1,0 +1,46 @@
+"""
+Configuration file for LAN Collaboration System
+Contains all network and application constants
+"""
+
+# Network Configuration
+SERVER_HOST = '0.0.0.0'  # Listen on all interfaces
+DEFAULT_PORT = 5555
+VIDEO_PORT = 5556
+AUDIO_PORT = 5557
+BUFFER_SIZE = 65536
+
+# Video Configuration
+VIDEO_WIDTH = 640
+VIDEO_HEIGHT = 480
+VIDEO_FPS = 15
+VIDEO_QUALITY = 50  # JPEG quality (0-100)
+
+# Audio Configuration
+AUDIO_CHUNK = 1024
+AUDIO_FORMAT = 8  # pyaudio.paInt16
+AUDIO_CHANNELS = 1
+AUDIO_RATE = 44100
+
+# Protocol Message Types
+MSG_CONNECT = "CONNECT"
+MSG_DISCONNECT = "DISCONNECT"
+MSG_CHAT = "CHAT"
+MSG_FILE_INFO = "FILE_INFO"
+MSG_FILE_DATA = "FILE_DATA"
+MSG_FILE_REQUEST = "FILE_REQUEST"
+MSG_SCREEN_START = "SCREEN_START"
+MSG_SCREEN_STOP = "SCREEN_STOP"
+MSG_SCREEN_FRAME = "SCREEN_FRAME"
+MSG_USER_LIST = "USER_LIST"
+MSG_VIDEO_STREAM = "VIDEO"
+MSG_AUDIO_STREAM = "AUDIO"
+
+# File Transfer
+MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
+FILE_CHUNK_SIZE = 8192
+
+# UI Configuration
+WINDOW_TITLE = "LAN Collaboration System"
+WINDOW_WIDTH = 1200
+WINDOW_HEIGHT = 800

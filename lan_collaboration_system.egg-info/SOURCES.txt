@@ -1,0 +1,8 @@
+README.md
+setup.py
+lan_collaboration_system.egg-info/PKG-INFO
+lan_collaboration_system.egg-info/SOURCES.txt
+lan_collaboration_system.egg-info/dependency_links.txt
+lan_collaboration_system.egg-info/entry_points.txt
+lan_collaboration_system.egg-info/requires.txt
+lan_collaboration_system.egg-info/top_level.txt

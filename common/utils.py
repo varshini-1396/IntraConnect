@@ -3,7 +3,6 @@ Utility functions shared between client and server
 """
 
 import socket
-import time
 from datetime import datetime
 
 def get_local_ip():

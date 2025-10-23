@@ -10,7 +10,17 @@ from tkinter import simpledialog, messagebox
 import sys
 sys.path.append('..')
 from common.protocol import send_message, receive_message
-from common.config import *
+from common.config import (
+    DEFAULT_PORT,
+    MSG_CONNECT,
+    MSG_USER_LIST,
+    MSG_CHAT,
+    MSG_FILE_INFO,
+    MSG_SCREEN_START,
+    MSG_SCREEN_STOP,
+    MSG_SCREEN_FRAME,
+    MSG_DISCONNECT,
+)
 from common.utils import get_local_ip, decompress_frame
 from video_capture import VideoCapture
 from audio_capture import AudioCapture
@@ -271,7 +281,7 @@ def main():
     default_ip = get_local_ip()
     server_ip = simpledialog.askstring(
         "Server IP",
-        f"Enter server IP address:",
+        "Enter server IP address:",
         initialvalue=default_ip,
         parent=root
     )

@@ -14,7 +14,20 @@ from video_handler import VideoHandler
 from audio_handler import AudioHandler
 sys.path.append('..')
 from common.protocol import receive_message, send_message
-from common.config import *
+from common.config import (
+    DEFAULT_PORT,
+    VIDEO_PORT,
+    AUDIO_PORT,
+    MSG_CONNECT,
+    MSG_USER_LIST,
+    MSG_CHAT,
+    MSG_FILE_INFO,
+    MSG_FILE_REQUEST,
+    MSG_SCREEN_START,
+    MSG_SCREEN_STOP,
+    MSG_SCREEN_FRAME,
+    MSG_DISCONNECT,
+)
 from common.utils import get_local_ip
 
 class CollaborationServer:
@@ -48,7 +61,7 @@ class CollaborationServer:
             
             local_ip = get_local_ip()
             print("=" * 60)
-            print(f"  LAN Collaboration Server Started")
+            print("  LAN Collaboration Server Started")
             print("=" * 60)
             print(f"  Server IP: {local_ip}")
             print(f"  Main Port: {self.port}")

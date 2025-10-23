@@ -4,11 +4,10 @@ Main user interface for the collaboration application
 """
 
 import tkinter as tk
-from tkinter import ttk, scrolledtext, filedialog, messagebox
+from tkinter import scrolledtext, filedialog, messagebox
 import threading
 from PIL import Image, ImageTk
 import cv2
-import numpy as np
 import sys
 sys.path.append('..')
 from common.utils import format_file_size
@@ -358,7 +357,6 @@ class CollaborationGUI:
         """Remove video display for disconnected user"""
         if username in self.video_canvases:
             canvas = self.video_canvases[username]
-            label = self.video_labels[username]
             
             canvas.master.destroy()
             

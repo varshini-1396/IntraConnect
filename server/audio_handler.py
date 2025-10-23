@@ -6,7 +6,7 @@ import socket
 import threading
 import struct
 import numpy as np
-from common.config import AUDIO_PORT, AUDIO_CHUNK, BUFFER_SIZE
+from common.config import AUDIO_PORT, BUFFER_SIZE
 
 class AudioHandler:
     def __init__(self, session_manager, host='0.0.0.0'):

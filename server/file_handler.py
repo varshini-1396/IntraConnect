@@ -47,7 +47,7 @@ class FileHandler:
                 self.broadcast_file_available(file_id, filename, filesize, username)
                 return True
             else:
-                print(f"[FILE] File transfer incomplete")
+                print("[FILE] File transfer incomplete")
                 return False
                 
         except Exception as e:

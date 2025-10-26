@@ -6,6 +6,7 @@ Main user interface for the collaboration application
 import tkinter as tk
 from tkinter import scrolledtext, filedialog, messagebox
 import threading
+import time
 from PIL import Image, ImageTk
 import cv2
 import sys
@@ -24,8 +25,14 @@ class CollaborationGUI:
         self.video_canvases = {}
         self.video_labels = {}
         
+        # Display lock for thread safety
+        self.display_lock = threading.Lock()
+        
         # Screen sharing canvas
         self.screen_canvas = None
+        
+        # Screen sharing state
+        self._screen_cleared = False
         
         # Initialize UI
         self.create_ui()
@@ -246,19 +253,31 @@ class CollaborationGUI:
         self.status_label.pack(side=tk.BOTTOM, fill=tk.X)
     
     def update_ui_thread(self):
-        """Thread to continuously update UI elements"""
+        """Thread to continuously update UI elements - Optimized for UDP streaming"""
+        last_update = time.time()
+        target_fps = 10  # Moderate FPS to prevent flickering
+        
         while self.running:
             try:
-                # Update video displays
-                self.update_video_displays()
+                current_time = time.time()
+                elapsed = current_time - last_update
                 
-                # Update screen share display
-                self.update_screen_display()
+                # Only update if enough time has passed
+                if elapsed >= (1.0 / target_fps):
+                    # Update video displays
+                    self.update_video_displays()
+                    
+                    # Update screen share display
+                    self.update_screen_display()
+                    
+                    last_update = current_time
                 
-                threading.Event().wait(0.033)  # ~30 FPS
+                # Short sleep for responsive updates
+                time.sleep(0.033)  # ~30ms sleep for smooth updates
                 
             except Exception as e:
                 print(f"[GUI] Update error: {e}")
+                time.sleep(0.1)
     
     def update_video_displays(self):
         """Update all video displays"""
@@ -288,28 +307,36 @@ class CollaborationGUI:
             print(f"[GUI] Video update error: {e}")
     
     def display_video_frame(self, username, frame):
-        """Display video frame for a user"""
+        """Display video frame for a user - Optimized for UDP streaming"""
         try:
-            # Create canvas if doesn't exist
-            if username not in self.video_canvases:
-                self.create_video_canvas(username)
-            
-            # Resize frame to fit canvas
-            frame_resized = cv2.resize(frame, (320, 240))
-            
-            # Convert BGR to RGB
-            frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
-            
-            # Convert to PhotoImage
-            img = Image.fromarray(frame_rgb)
-            photo = ImageTk.PhotoImage(image=img)
-            
-            # Update canvas
-            canvas = self.video_canvases[username]
-            canvas.delete("all")
-            canvas.create_image(0, 0, anchor=tk.NW, image=photo)
-            canvas.image = photo  # Keep reference
-            
+            with self.display_lock:
+                # Create canvas if doesn't exist
+                if username not in self.video_canvases:
+                    self.create_video_canvas(username)
+                
+                # Resize frame to fit canvas
+                frame_resized = cv2.resize(frame, (240, 180))
+                
+                # Convert BGR to RGB
+                frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
+                
+                # Convert to PhotoImage
+                img = Image.fromarray(frame_rgb)
+                photo = ImageTk.PhotoImage(image=img)
+                
+                # Update canvas
+                canvas = self.video_canvases[username]
+                
+                # Use itemconfig for smooth updates without flickering
+                if hasattr(canvas, 'current_image_id') and canvas.current_image_id is not None:
+                    # Update existing image instead of deleting and recreating
+                    canvas.itemconfig(canvas.current_image_id, image=photo)
+                else:
+                    # Create new image only on first frame
+                    canvas.current_image_id = canvas.create_image(0, 0, anchor=tk.NW, image=photo)
+                
+                canvas.image = photo  # Keep reference to prevent garbage collection
+                
         except Exception as e:
             print(f"[GUI] Display frame error for {username}: {e}")
     
@@ -339,16 +366,24 @@ class CollaborationGUI:
         )
         label.pack(fill=tk.X)
         
-        # Video canvas
+        # Video canvas - smaller size for better performance
         canvas = tk.Canvas(
             user_frame,
-            width=320,
-            height=240,
+            width=240,
+            height=180,
             bg='#2C3E50',
             highlightthickness=1,
             highlightbackground='#3498DB'
         )
         canvas.pack(fill=tk.BOTH, expand=True)
+        
+        # Enable double buffering and smooth updates
+        canvas.configure(relief='flat', bd=0)
+        canvas.update_idletasks()  # Force initial update
+        
+        # Initialize canvas properties for smooth updates
+        canvas.current_image_id = None
+        canvas.image = None
         
         self.video_canvases[username] = canvas
         self.video_labels[username] = label
@@ -401,22 +436,30 @@ class CollaborationGUI:
                     img = Image.fromarray(frame_rgb)
                     photo = ImageTk.PhotoImage(image=img)
                     
-                    # Update canvas
-                    self.screen_canvas.delete("all")
-                    self.screen_canvas.create_image(0, 0, anchor=tk.NW, image=photo)
+                    # Update canvas - use itemconfig for smooth updates
+                    if not hasattr(self.screen_canvas, 'screen_image_id') or self.screen_canvas.screen_image_id is None:
+                        self.screen_canvas.delete("all")
+                        self.screen_canvas.screen_image_id = self.screen_canvas.create_image(0, 0, anchor=tk.NW, image=photo)
+                    else:
+                        self.screen_canvas.itemconfig(self.screen_canvas.screen_image_id, image=photo)
+                    
                     self.screen_canvas.image = photo
+                    self._screen_cleared = False
             else:
                 # Clear canvas if no screen sharing
-                if not hasattr(self, '_screen_cleared'):
+                if not self._screen_cleared:
                     self.screen_canvas.delete("all")
-                    self.screen_canvas.create_text(
-                        self.screen_canvas.winfo_width() // 2,
-                        self.screen_canvas.winfo_height() // 2,
-                        text="No screen sharing active",
-                        fill='white',
-                        font=('Arial', 14)
-                    )
+                    if self.screen_canvas.winfo_width() > 1 and self.screen_canvas.winfo_height() > 1:
+                        self.screen_canvas.create_text(
+                            self.screen_canvas.winfo_width() // 2,
+                            self.screen_canvas.winfo_height() // 2,
+                            text="No screen sharing active",
+                            fill='white',
+                            font=('Arial', 14)
+                        )
                     self._screen_cleared = True
+                    if hasattr(self.screen_canvas, 'screen_image_id'):
+                        self.screen_canvas.screen_image_id = None
         
         except Exception as e:
             print(f"[GUI] Screen display error: {e}")

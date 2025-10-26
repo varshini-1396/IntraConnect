@@ -6,10 +6,22 @@ Handles screen/slide capture for presentation
 import threading
 import sys
 sys.path.append('..')
-from PIL import ImageGrab
-from common.utils import compress_frame
-import cv2
-import numpy as np
+
+try:
+    from PIL import ImageGrab
+except ImportError:
+    print("[SCREEN] PIL not available, screen capture disabled")
+    ImageGrab = None
+
+try:
+    import cv2
+    import numpy as np
+    from common.utils import compress_frame
+except ImportError as e:
+    print(f"[SCREEN] Required libraries not available: {e}")
+    cv2 = None
+    np = None
+    compress_frame = None
 
 class ScreenCapture:
     def __init__(self):
@@ -20,6 +32,10 @@ class ScreenCapture:
         
     def start_capture(self):
         """Start capturing screen"""
+        if ImageGrab is None or cv2 is None or np is None:
+            print("[SCREEN] Cannot start: dependencies not available")
+            return False
+            
         self.capturing = True
         self.running = True
         threading.Thread(target=self.capture_thread, daemon=True).start()
@@ -31,8 +47,13 @@ class ScreenCapture:
         while self.running:
             try:
                 if self.capturing:
+                    if ImageGrab is None:
+                        break
                     # Capture screen
                     screenshot = ImageGrab.grab()
+                    
+                    if screenshot is None:
+                        continue
                     
                     # Resize to reasonable size for transmission
                     screenshot = screenshot.resize((1280, 720))
@@ -48,13 +69,22 @@ class ScreenCapture:
                 
             except Exception as e:
                 print(f"[SCREEN] Capture error: {e}")
+                # Don't break on minor errors, just log and continue
+                threading.Event().wait(0.1)
     
     def get_compressed_frame(self):
         """Get current screen frame compressed"""
+        if compress_frame is None:
+            return None
+            
         with self.lock:
             if self.current_frame is not None:
-                compressed = compress_frame(self.current_frame, quality=70)
-                return compressed
+                try:
+                    compressed = compress_frame(self.current_frame, quality=70)
+                    return compressed
+                except Exception as e:
+                    print(f"[SCREEN] Compression error: {e}")
+                    return None
         return None
     
     def stop_capture(self):

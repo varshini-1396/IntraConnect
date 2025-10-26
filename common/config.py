@@ -10,11 +10,11 @@ VIDEO_PORT = 5556
 AUDIO_PORT = 5557
 BUFFER_SIZE = 65536
 
-# Video Configuration
+# Video Configuration - Optimized for UDP streaming
 VIDEO_WIDTH = 640
 VIDEO_HEIGHT = 480
-VIDEO_FPS = 15
-VIDEO_QUALITY = 50  # JPEG quality (0-100)
+VIDEO_FPS = 20  # Higher FPS for smooth UDP streaming
+VIDEO_QUALITY = 70  # Good quality for UDP streaming
 
 # Audio Configuration
 AUDIO_CHUNK = 1024

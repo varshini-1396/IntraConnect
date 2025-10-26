@@ -1,110 +1,207 @@
 """
-Video Capture Module
-Handles webcam capture and video display
+Video Capture Module - UDP Streaming Integration
+Handles webcam capture using efficient UDP streaming like your friend's app
 """
 
 import cv2
+import numpy as np
 import threading
 import socket
 import struct
+import time
+import queue
 import sys
 sys.path.append('..')
-from common.config import VIDEO_PORT, VIDEO_WIDTH, VIDEO_HEIGHT, VIDEO_FPS, VIDEO_QUALITY, BUFFER_SIZE
-from common.utils import compress_frame, decompress_frame
+from common.config import VIDEO_PORT, VIDEO_WIDTH, VIDEO_HEIGHT, VIDEO_FPS
+
+# UDP Streaming Configuration
+CHUNK_SIZE = 60000            # chunk payload size (safe < UDP limit)
+FRAME_TIMEOUT = 2.0           # seconds to wait for missing packets before dropping frame
+JPEG_QUALITY = 70             # encoding quality 0-100
+
+# Packet header format: frame_id (Q), total_pkts (I), pkt_idx (I), payload_len (H)
+HDR_FMT = "!QIIH"
+HDR_SIZE = struct.calcsize(HDR_FMT)
 
 class VideoCapture:
     def __init__(self, username):
         self.username = username
         self.capture = None
         self.running = False
-        self.video_socket = None
         self.server_address = None
         self.local_frame = None
         self.remote_frames = {}  # {username: frame}
         self.lock = threading.Lock()
         
+        # UDP streaming
+        self.frame_id = 0
+        self.frames_in_progress = {}
+        self.local_frame_q = queue.Queue(maxsize=2)
+        self.remote_frame_q = queue.Queue(maxsize=2)
+        
     def start_capture(self, server_ip):
-        """Start capturing and sending video"""
+        """Start capturing and sending video using UDP streaming"""
         try:
             self.capture = cv2.VideoCapture(0)
+            if not self.capture.isOpened():
+                print("[VIDEO] Could not open camera")
+                return False
+                
             self.capture.set(cv2.CAP_PROP_FRAME_WIDTH, VIDEO_WIDTH)
             self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, VIDEO_HEIGHT)
             self.capture.set(cv2.CAP_PROP_FPS, VIDEO_FPS)
             
-            # Create UDP socket for video
-            self.video_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.video_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.video_socket.bind(('0.0.0.0', VIDEO_PORT))
+            # Server address for sending
             self.server_address = (server_ip, VIDEO_PORT)
             
             self.running = True
             
-            # Start capture thread
-            threading.Thread(target=self.capture_thread, daemon=True).start()
-            # Start receive thread
-            threading.Thread(target=self.receive_thread, daemon=True).start()
+            # Start UDP sender thread (sends to server)
+            threading.Thread(target=self.udp_sender_thread, daemon=True).start()
+            # Start UDP receiver thread (receives from server)
+            threading.Thread(target=self.udp_receiver_thread, daemon=True).start()
             
-            print("[VIDEO] Video capture started")
+            print("[VIDEO] UDP video capture started")
             return True
             
         except Exception as e:
             print(f"[VIDEO] Failed to start capture: {e}")
             return False
     
-    def capture_thread(self):
-        """Capture and send video frames"""
-        while self.running:
-            try:
+    def udp_sender_thread(self):
+        """Continuously capture frames, encode, split, and send via UDP"""
+        print("[VIDEO] Starting UDP sender to", self.server_address)
+        
+        if not self.capture.isOpened():
+            print("[-] Cannot open webcam")
+            self.running = False
+            return
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        frame_id = 0
+        
+        try:
+            while self.running:
                 ret, frame = self.capture.read()
                 if not ret:
+                    time.sleep(0.01)
                     continue
-                
+
                 # Store local frame for display
                 with self.lock:
                     self.local_frame = frame.copy()
+
+                # Encode JPEG
+                ok, enc = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
+                if not ok:
+                    continue
+                payload = enc.tobytes()
+                total_len = len(payload)
+
+                # Split into chunks
+                total_pkts = (total_len + CHUNK_SIZE - 1) // CHUNK_SIZE
+                offset = 0
+                for pkt_idx in range(total_pkts):
+                    chunk = payload[offset: offset+CHUNK_SIZE]
+                    offset += CHUNK_SIZE
+                    hdr = struct.pack(HDR_FMT, frame_id, total_pkts, pkt_idx, len(chunk))
+                    packet = hdr + chunk
+                    try:
+                        sock.sendto(packet, self.server_address)
+                    except Exception as e:
+                        print(f"[VIDEO] Send error: {e}")
                 
-                # Compress and send frame
-                compressed = compress_frame(frame, VIDEO_QUALITY)
-                if compressed:
-                    # Format: [username_length:4bytes][username][frame_data]
-                    username_bytes = self.username.encode('utf-8')
-                    username_len = struct.pack('!I', len(username_bytes))
-                    packet = username_len + username_bytes + compressed
-                    
-                    self.video_socket.sendto(packet, self.server_address)
+                frame_id = (frame_id + 1) & 0xFFFFFFFFFFFFFFFF
+                time.sleep(0.01)  # Small throttle
                 
-                # Control frame rate
-                threading.Event().wait(1.0 / VIDEO_FPS)
-                
-            except Exception as e:
-                if self.running:
-                    print(f"[VIDEO] Capture error: {e}")
+        except Exception as e:
+            print(f"[VIDEO] Sender error: {e}")
+        finally:
+            sock.close()
+            print("[VIDEO] UDP sender thread exiting")
     
-    def receive_thread(self):
-        """Receive video frames from server"""
-        while self.running:
-            try:
-                data, addr = self.video_socket.recvfrom(BUFFER_SIZE)
-                
-                # Extract username and frame data
-                username_len = struct.unpack('!I', data[:4])[0]
-                username = data[4:4+username_len].decode('utf-8')
-                frame_data = data[4+username_len:]
-                
-                # Decompress frame
-                frame = decompress_frame(frame_data)
-                if frame is not None:
-                    with self.lock:
-                        self.remote_frames[username] = frame
-                
-            except Exception as e:
-                if self.running:
+    def udp_receiver_thread(self):
+        """Receive UDP packets, reassemble frames, store in remote_frames"""
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(('0.0.0.0', VIDEO_PORT))
+        sock.settimeout(0.5)
+        print("[VIDEO] UDP receiver listening on port", VIDEO_PORT)
+
+        try:
+            while self.running:
+                try:
+                    packet, addr = sock.recvfrom(CHUNK_SIZE + HDR_SIZE + 16)
+                except socket.timeout:
+                    # Cleanup stale frames
+                    now = time.time()
+                    stale = []
+                    for fid, info in self.frames_in_progress.items():
+                        if now - info['last_time'] > FRAME_TIMEOUT:
+                            stale.append(fid)
+                    for fid in stale:
+                        self.frames_in_progress.pop(fid, None)
+                    continue
+                except Exception as e:
                     print(f"[VIDEO] Receive error: {e}")
+                    break
+
+                if len(packet) < HDR_SIZE:
+                    continue
+                    
+                hdr = packet[:HDR_SIZE]
+                try:
+                    frame_id, total_pkts, pkt_idx, payload_len = struct.unpack(HDR_FMT, hdr)
+                except Exception:
+                    continue
+                    
+                chunk = packet[HDR_SIZE: HDR_SIZE+payload_len]
+
+                if frame_id not in self.frames_in_progress:
+                    self.frames_in_progress[frame_id] = {
+                        'total': total_pkts,
+                        'parts': {},
+                        'received': 0,
+                        'last_time': time.time()
+                    }
+                    
+                info = self.frames_in_progress[frame_id]
+                if pkt_idx not in info['parts']:
+                    info['parts'][pkt_idx] = chunk
+                    info['received'] += 1
+                    info['last_time'] = time.time()
+
+                # If complete frame
+                if info['received'] == info['total']:
+                    # Reassemble
+                    parts = [info['parts'].get(i, b'') for i in range(info['total'])]
+                    payload = b''.join(parts)
+                    try:
+                        # Decode JPEG
+                        nparr = np.frombuffer(payload, dtype=np.uint8)
+                        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                        if frame is not None:
+                            # Store in remote frames (use sender IP as username)
+                            with self.lock:
+                                self.remote_frames[addr[0]] = frame
+                    except Exception as e:
+                        print(f"[VIDEO] Decode error: {e}")
+                    # Remove completed frame
+                    self.frames_in_progress.pop(frame_id, None)
+                    
+        except Exception as e:
+            print(f"[VIDEO] Receiver error: {e}")
+        finally:
+            sock.close()
+            print("[VIDEO] UDP receiver thread exiting")
+    
     
     def get_local_frame(self):
         """Get local camera frame"""
         with self.lock:
-            return self.local_frame.copy() if self.local_frame is not None else None
+            if self.local_frame is not None:
+                return self.local_frame.copy()
+            return None
     
     def get_remote_frames(self):
         """Get all remote video frames"""
@@ -116,6 +213,4 @@ class VideoCapture:
         self.running = False
         if self.capture:
             self.capture.release()
-        if self.video_socket:
-            self.video_socket.close()
         print("[VIDEO] Video capture stopped")

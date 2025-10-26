@@ -44,6 +44,7 @@ class VideoHandler:
             threading.Thread(target=self.broadcast_video, daemon=True).start()
             
             print(f"[VIDEO] Handler started on port {VIDEO_PORT}")
+            print(f"[VIDEO] Listening for video from clients and broadcasting to {VIDEO_PORT}")
             return True
         except Exception as e:
             print(f"[VIDEO] Failed to start: {e}")
@@ -120,8 +121,10 @@ class VideoHandler:
                             nparr = np.frombuffer(payload, dtype=np.uint8)
                             frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                             if frame is not None:
-                                # Store complete frame
-                                self.video_streams[username] = frame
+                            # Store complete frame
+                            self.video_streams[username] = frame
+                            # Uncomment for detailed debugging:
+                            # print(f"[VIDEO] Received complete frame from {username}")
                         except Exception as e:
                             print(f"[VIDEO] Decode error: {e}")
                         # Remove completed frame
@@ -195,6 +198,9 @@ class VideoHandler:
                                     
                                 except Exception as e:
                                     print(f"[VIDEO] Broadcast encode error: {e}")
+                                
+                                # Uncomment for detailed debugging:
+                                # print(f"[VIDEO] Broadcasting {stream_user}'s video to {username}")
                 
                 threading.Event().wait(0.033)  # ~30 FPS broadcast rate
                 

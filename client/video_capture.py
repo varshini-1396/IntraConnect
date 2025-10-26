@@ -61,7 +61,7 @@ class VideoCapture:
             # Start UDP receiver thread (receives from server)
             threading.Thread(target=self.udp_receiver_thread, daemon=True).start()
             
-            print("[VIDEO] UDP video capture started")
+            print(f"[VIDEO] UDP video capture started - sending to {self.server_address}, receiving on port {VIDEO_PORT}")
             return True
             
         except Exception as e:
@@ -101,6 +101,9 @@ class VideoCapture:
                 # Split into chunks
                 total_pkts = (total_len + CHUNK_SIZE - 1) // CHUNK_SIZE
                 offset = 0
+                # Uncomment for detailed debugging:
+                # if frame_id % 30 == 0:
+                #     print(f"[VIDEO] Sending frame {frame_id} to server ({total_pkts} packets)")
                 for pkt_idx in range(total_pkts):
                     chunk = payload[offset: offset+CHUNK_SIZE]
                     offset += CHUNK_SIZE
@@ -199,6 +202,8 @@ class VideoCapture:
                             # Store in remote frames using actual username
                             with self.lock:
                                 self.remote_frames[username] = frame
+                                # Uncomment for detailed debugging:
+                                # print(f"[VIDEO] Received frame from {username}")
                     except Exception as e:
                         print(f"[VIDEO] Decode error: {e}")
                     # Remove completed frame

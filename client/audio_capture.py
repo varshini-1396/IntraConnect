@@ -87,14 +87,17 @@ class AudioCapture:
         while self.running:
             try:
                 # Receive mixed audio
-                data, addr = self.audio_socket.recvfrom(BUFFER_SIZE)
+                data, _ = self.audio_socket.recvfrom(BUFFER_SIZE)
                 
-                # Play audio
-                self.stream_out.write(data)
+                # Validate audio data is reasonable length
+                if len(data) > 0 and len(data) < 50000:  # Max ~50KB per chunk
+                    # Play audio
+                    self.stream_out.write(data)
                 
-            except Exception as e:
+            except Exception:
                 if self.running:
-                    print(f"[AUDIO] Receive error: {e}")
+                    # Don't spam error messages for audio issues
+                    pass
     
     def stop_audio(self):
         """Stop audio capture and playback"""

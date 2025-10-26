@@ -40,20 +40,36 @@ class AudioHandler:
         """Receive audio chunks from clients"""
         while self.running:
             try:
-                data, addr = self.audio_socket.recvfrom(BUFFER_SIZE)
+                data, _ = self.audio_socket.recvfrom(BUFFER_SIZE)
                 
-                # Extract username and audio data
-                # Format: [username_length:4bytes][username][audio_data]
-                username_len = struct.unpack('!I', data[:4])[0]
-                username = data[4:4+username_len].decode('utf-8')
-                audio_data = data[4+username_len:]
+                # Check if packet is long enough to have header
+                if len(data) < 4:
+                    continue
                 
-                with self.lock:
-                    self.audio_buffers[username] = audio_data
+                try:
+                    # Extract username and audio data
+                    # Format: [username_length:4bytes][username][audio_data]
+                    username_len = struct.unpack('!I', data[:4])[0]
+                    
+                    # Validate username length is reasonable
+                    if username_len > 100 or username_len < 0 or 4 + username_len > len(data):
+                        continue
+                    
+                    username = data[4:4+username_len].decode('utf-8')
+                    audio_data = data[4+username_len:]
+                    
+                    if audio_data:  # Only store if there's actual audio data
+                        with self.lock:
+                            self.audio_buffers[username] = audio_data
+                            
+                except (struct.error, UnicodeDecodeError):
+                    # Skip invalid packets (likely not audio data or corrupted)
+                    continue
                     
             except Exception as e:
                 if self.running:
-                    print(f"[AUDIO] Receive error: {e}")
+                    # Don't print errors for every invalid packet
+                    pass
     
     def mix_and_broadcast(self):
         """Mix audio from all sources and broadcast to all clients"""

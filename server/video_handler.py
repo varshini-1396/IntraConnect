@@ -121,10 +121,10 @@ class VideoHandler:
                             nparr = np.frombuffer(payload, dtype=np.uint8)
                             frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                             if frame is not None:
-                            # Store complete frame
-                            self.video_streams[username] = frame
-                            # Uncomment for detailed debugging:
-                            # print(f"[VIDEO] Received complete frame from {username}")
+                                # Store complete frame
+                                self.video_streams[username] = frame
+                                # Uncomment for detailed debugging:
+                                # print(f"[VIDEO] Received complete frame from {username}")
                         except Exception as e:
                             print(f"[VIDEO] Decode error: {e}")
                         # Remove completed frame

@@ -19,9 +19,9 @@ CHUNK_SIZE = 60000            # chunk payload size (safe < UDP limit)
 FRAME_TIMEOUT = 2.0           # seconds to wait for missing packets before dropping frame
 JPEG_QUALITY = 70             # encoding quality 0-100
 
-# Packet header format: frame_id (Q), total_pkts (I), pkt_idx (I), payload_len (H)
-HDR_FMT = "!QIIH"
-HDR_SIZE = struct.calcsize(HDR_FMT)
+# Packet header format: username_len (H), username (str), frame_id (Q), total_pkts (I), pkt_idx (I), payload_len (H)
+HDR_BASE_FMT = "!QIIH"  # frame_id (Q), total_pkts (I), pkt_idx (I), payload_len (H)
+HDR_BASE_SIZE = struct.calcsize(HDR_BASE_FMT)
 
 class VideoCapture:
     def __init__(self, username):
@@ -35,7 +35,7 @@ class VideoCapture:
         
         # UDP streaming
         self.frame_id = 0
-        self.frames_in_progress = {}
+        self.frames_in_progress = {}  # {username: {frame_id: {...}}}
         self.local_frame_q = queue.Queue(maxsize=2)
         self.remote_frame_q = queue.Queue(maxsize=2)
         
@@ -104,8 +104,11 @@ class VideoCapture:
                 for pkt_idx in range(total_pkts):
                     chunk = payload[offset: offset+CHUNK_SIZE]
                     offset += CHUNK_SIZE
-                    hdr = struct.pack(HDR_FMT, frame_id, total_pkts, pkt_idx, len(chunk))
-                    packet = hdr + chunk
+                    hdr = struct.pack(HDR_BASE_FMT, frame_id, total_pkts, pkt_idx, len(chunk))
+                    # Prepend username to packet
+                    username_bytes = self.username.encode('utf-8')
+                    username_header = struct.pack('!H', len(username_bytes)) + username_bytes
+                    packet = username_header + hdr + chunk
                     try:
                         sock.sendto(packet, self.server_address)
                     except Exception as e:
@@ -131,41 +134,53 @@ class VideoCapture:
         try:
             while self.running:
                 try:
-                    packet, addr = sock.recvfrom(CHUNK_SIZE + HDR_SIZE + 16)
+                    packet, _ = sock.recvfrom(CHUNK_SIZE + HDR_BASE_SIZE + 64)
                 except socket.timeout:
                     # Cleanup stale frames
                     now = time.time()
-                    stale = []
-                    for fid, info in self.frames_in_progress.items():
-                        if now - info['last_time'] > FRAME_TIMEOUT:
-                            stale.append(fid)
-                    for fid in stale:
-                        self.frames_in_progress.pop(fid, None)
+                    for frames in self.frames_in_progress.values():
+                        stale_fids = [fid for fid, info in frames.items() 
+                                     if now - info['last_time'] > FRAME_TIMEOUT]
+                        for fid in stale_fids:
+                            frames.pop(fid, None)
                     continue
                 except Exception as e:
                     print(f"[VIDEO] Receive error: {e}")
                     break
 
-                if len(packet) < HDR_SIZE:
+                if len(packet) < HDR_BASE_SIZE + 2:
+                    continue
+                
+                # Extract username
+                username_len = struct.unpack('!H', packet[:2])[0]
+                if len(packet) < 2 + username_len + HDR_BASE_SIZE:
                     continue
                     
-                hdr = packet[:HDR_SIZE]
+                username_bytes = packet[2:2+username_len]
+                username = username_bytes.decode('utf-8')
+                    
+                hdr = packet[2+username_len:2+username_len+HDR_BASE_SIZE]
                 try:
-                    frame_id, total_pkts, pkt_idx, payload_len = struct.unpack(HDR_FMT, hdr)
+                    frame_id, total_pkts, pkt_idx, payload_len = struct.unpack(HDR_BASE_FMT, hdr)
                 except Exception:
                     continue
                     
-                chunk = packet[HDR_SIZE: HDR_SIZE+payload_len]
+                chunk = packet[2+username_len+HDR_BASE_SIZE:2+username_len+HDR_BASE_SIZE+payload_len]
 
-                if frame_id not in self.frames_in_progress:
-                    self.frames_in_progress[frame_id] = {
+                # Initialize frame tracking for user
+                if username not in self.frames_in_progress:
+                    self.frames_in_progress[username] = {}
+                    
+                frames = self.frames_in_progress[username]
+                if frame_id not in frames:
+                    frames[frame_id] = {
                         'total': total_pkts,
                         'parts': {},
                         'received': 0,
                         'last_time': time.time()
                     }
                     
-                info = self.frames_in_progress[frame_id]
+                info = frames[frame_id]
                 if pkt_idx not in info['parts']:
                     info['parts'][pkt_idx] = chunk
                     info['received'] += 1
@@ -181,13 +196,13 @@ class VideoCapture:
                         nparr = np.frombuffer(payload, dtype=np.uint8)
                         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                         if frame is not None:
-                            # Store in remote frames (use sender IP as username)
+                            # Store in remote frames using actual username
                             with self.lock:
-                                self.remote_frames[addr[0]] = frame
+                                self.remote_frames[username] = frame
                     except Exception as e:
                         print(f"[VIDEO] Decode error: {e}")
                     # Remove completed frame
-                    self.frames_in_progress.pop(frame_id, None)
+                    frames.pop(frame_id, None)
                     
         except Exception as e:
             print(f"[VIDEO] Receiver error: {e}")

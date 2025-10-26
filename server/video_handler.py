@@ -15,9 +15,9 @@ CHUNK_SIZE = 60000            # chunk payload size (safe < UDP limit)
 FRAME_TIMEOUT = 2.0           # seconds to wait for missing packets before dropping frame
 JPEG_QUALITY = 70             # encoding quality 0-100
 
-# Packet header format: frame_id (Q), total_pkts (I), pkt_idx (I), payload_len (H)
-HDR_FMT = "!QIIH"
-HDR_SIZE = struct.calcsize(HDR_FMT)
+# Packet header format: username_len (H), username (str), frame_id (Q), total_pkts (I), pkt_idx (I), payload_len (H)
+HDR_BASE_FMT = "!QIIH"  # frame_id (Q), total_pkts (I), pkt_idx (I), payload_len (H)
+HDR_BASE_SIZE = struct.calcsize(HDR_BASE_FMT)
 
 class VideoHandler:
     def __init__(self, session_manager, host='0.0.0.0'):
@@ -55,12 +55,12 @@ class VideoHandler:
         while self.running:
             try:
                 try:
-                    packet, addr = self.video_socket.recvfrom(CHUNK_SIZE + HDR_SIZE + 16)
+                    packet, _ = self.video_socket.recvfrom(CHUNK_SIZE + HDR_BASE_SIZE + 64)
                 except socket.timeout:
                     # Cleanup stale frames
                     now = time.time()
                     with self.lock:
-                        for user, frames in self.frames_in_progress.items():
+                        for frames in self.frames_in_progress.values():
                             stale_ids = [fid for fid, info in frames.items() 
                                        if now - info['last_time'] > FRAME_TIMEOUT]
                             for fid in stale_ids:
@@ -71,27 +71,24 @@ class VideoHandler:
                         print(f"[VIDEO] Receive error: {e}")
                     break
                 
-                if len(packet) < HDR_SIZE:
+                if len(packet) < HDR_BASE_SIZE + 2:
                     continue
                 
-                hdr = packet[:HDR_SIZE]
+                # Extract username length and username
+                username_len = struct.unpack('!H', packet[:2])[0]
+                if len(packet) < 2 + username_len + HDR_BASE_SIZE:
+                    continue
+                    
+                username_bytes = packet[2:2+username_len]
+                username = username_bytes.decode('utf-8')
+                
+                hdr = packet[2+username_len:2+username_len+HDR_BASE_SIZE]
                 try:
-                    frame_id, total_pkts, pkt_idx, payload_len = struct.unpack(HDR_FMT, hdr)
+                    frame_id, total_pkts, pkt_idx, payload_len = struct.unpack(HDR_BASE_FMT, hdr)
                 except Exception:
                     continue
                 
-                chunk = packet[HDR_SIZE: HDR_SIZE+payload_len]
-                
-                # Extract username from addr
-                username = None
-                for user in self.session_manager.get_user_list():
-                    user_data = self.session_manager.users.get(user)
-                    if user_data and user_data['address'][0] == addr[0]:
-                        username = user
-                        break
-                
-                if not username:
-                    continue
+                chunk = packet[2+username_len+HDR_BASE_SIZE:2+username_len+HDR_BASE_SIZE+payload_len]
                 
                 # Initialize frame tracking for user
                 with self.lock:
@@ -183,8 +180,11 @@ class VideoHandler:
                                     for pkt_idx in range(total_pkts):
                                         chunk = payload[offset:offset+CHUNK_SIZE]
                                         offset += CHUNK_SIZE
-                                        hdr = struct.pack(HDR_FMT, frame_id, total_pkts, pkt_idx, len(chunk))
-                                        packet = hdr + chunk
+                                        hdr = struct.pack(HDR_BASE_FMT, frame_id, total_pkts, pkt_idx, len(chunk))
+                                        # Prepend username to packet: [username_len:2bytes][username][header][data]
+                                        username_bytes = stream_user.encode('utf-8')
+                                        username_header = struct.pack('!H', len(username_bytes)) + username_bytes
+                                        packet = username_header + hdr + chunk
                                         
                                         try:
                                             self.video_socket.sendto(packet, (client_addr[0], VIDEO_PORT))

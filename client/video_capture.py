@@ -35,6 +35,7 @@ class VideoCapture:
         
         # UDP streaming
         self.frame_id = 0
+        self.received_frame_count = 0  # Track received frames for debugging
         self.frames_in_progress = {}  # {username: {frame_id: {...}}}
         self.local_frame_q = queue.Queue(maxsize=2)
         self.remote_frame_q = queue.Queue(maxsize=2)
@@ -202,8 +203,9 @@ class VideoCapture:
                             # Store in remote frames using actual username
                             with self.lock:
                                 self.remote_frames[username] = frame
-                                # Uncomment for detailed debugging:
-                                # print(f"[VIDEO] Received frame from {username}")
+                                self.received_frame_count += 1
+                                if self.received_frame_count % 60 == 1 or len(self.remote_frames) != 1:  # Print first frame or when user count changes
+                                    print(f"[VIDEO] ✓ Total frames received: {self.received_frame_count}, Users visible: {list(self.remote_frames.keys())}")
                     except Exception as e:
                         print(f"[VIDEO] Decode error: {e}")
                     # Remove completed frame

@@ -264,11 +264,9 @@ class CollaborationGUI:
                 
                 # Only update if enough time has passed
                 if elapsed >= (1.0 / target_fps):
-                    # Update video displays
-                    self.update_video_displays()
-                    
-                    # Update screen share display
-                    self.update_screen_display()
+                    # Schedule update on main thread (thread-safe)
+                    self.root.after(0, self.update_video_displays)
+                    self.root.after(0, self.update_screen_display)
                     
                     last_update = current_time
                 
@@ -280,19 +278,33 @@ class CollaborationGUI:
                 time.sleep(0.1)
     
     def update_video_displays(self):
-        """Update all video displays"""
+        """Update all video displays - MUST be called from main thread"""
         try:
+            all_visible_users = set()
+            
             # Get local frame
             if self.client.video_capture and self.client.video_enabled:
                 local_frame = self.client.video_capture.get_local_frame()
                 if local_frame is not None:
                     self.display_video_frame("You", local_frame)
+                    all_visible_users.add("You")
             
             # Get remote frames
             if self.client.video_capture:
                 remote_frames = self.client.video_capture.get_remote_frames()
+                
+                # Print status periodically
+                if len(remote_frames) > 0 or len(self.video_canvases) > 0:
+                    current_users_list = list(remote_frames.keys())
+                    if "You" in all_visible_users:
+                        current_users_list.append("You")
+                    if set(self.video_canvases.keys()) != set(current_users_list):
+                        print(f"[GUI] Displaying video from users: {current_users_list}")
+                
                 for username, frame in remote_frames.items():
-                    self.display_video_frame(username, frame)
+                    if frame is not None:
+                        self.display_video_frame(username, frame)
+                        all_visible_users.add(username)
                 
                 # Remove disconnected users
                 current_users = set(remote_frames.keys())
@@ -301,10 +313,13 @@ class CollaborationGUI:
                 
                 for username in list(self.video_canvases.keys()):
                     if username not in current_users:
+                        print(f"[GUI] Removing video display for disconnected user: {username}")
                         self.remove_video_display(username)
         
         except Exception as e:
             print(f"[GUI] Video update error: {e}")
+            import traceback
+            traceback.print_exc()
     
     def display_video_frame(self, username, frame):
         """Display video frame for a user - Optimized for UDP streaming"""
@@ -312,6 +327,7 @@ class CollaborationGUI:
             with self.display_lock:
                 # Create canvas if doesn't exist
                 if username not in self.video_canvases:
+                    print(f"[GUI] Creating video canvas for user: {username}")
                     self.create_video_canvas(username)
                 
                 # Resize frame to fit canvas
@@ -416,7 +432,7 @@ class CollaborationGUI:
             self.video_grid.grid_columnconfigure(col, weight=1)
     
     def update_screen_display(self):
-        """Update screen sharing display"""
+        """Update screen sharing display - MUST be called from main thread"""
         try:
             if self.client.shared_screen is not None:
                 frame = self.client.shared_screen
@@ -462,7 +478,9 @@ class CollaborationGUI:
                         self.screen_canvas.screen_image_id = None
         
         except Exception as e:
-            print(f"[GUI] Screen display error: {e}")
+            # Don't print "main thread is not in main loop" error
+            if "main loop" not in str(e):
+                print(f"[GUI] Screen display error: {e}")
     
     def send_chat_message(self):
         """Send chat message"""

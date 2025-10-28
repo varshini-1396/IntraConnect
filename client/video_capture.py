@@ -29,6 +29,7 @@ class VideoCapture:
         self.capture = None
         self.running = False
         self.server_address = None
+        self.client_video_port = None # Port this client listens on
         self.local_frame = None
         self.remote_frames = {}  # {username: frame}
         self.lock = threading.Lock()
@@ -132,8 +133,11 @@ class VideoCapture:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(('0.0.0.0', VIDEO_PORT))
+        sock.bind(('0.0.0.0', 0))  # Bind to a random available port
+        self.client_video_port = sock.getsockname()[1] # Get the assigned port
         sock.settimeout(0.5)
         print("[VIDEO] UDP receiver listening on port", VIDEO_PORT)
+        print(f"[VIDEO] UDP receiver listening on port {self.client_video_port}")
 
         try:
             while self.running:

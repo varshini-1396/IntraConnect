@@ -65,8 +65,19 @@ class CollaborationClient:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.connect((server_ip, DEFAULT_PORT))
             
+            # Initialize video capture early to get the dynamic port
+            self.video_capture = VideoCapture(username)
+            # The receiver thread needs to start to bind the socket and get the port
+            threading.Thread(target=self.video_capture.udp_receiver_thread, daemon=True).start()
+            
+            # Wait a moment for the port to be assigned
+            while self.video_capture.client_video_port is None:
+                time.sleep(0.1)
+            
             # Send connection message
             send_message(self.socket, MSG_CONNECT, {'username': username})
+            connect_data = {'username': username, 'video_port': self.video_capture.client_video_port}
+            send_message(self.socket, MSG_CONNECT, connect_data)
             
             # Wait for response
             msg_type, data = receive_message(self.socket)
@@ -91,6 +102,7 @@ class CollaborationClient:
                 return False
                 
         except Exception as e:
+            import traceback; traceback.print_exc()
             print(f"[CLIENT] Connection error: {e}")
             return False
     
@@ -149,6 +161,8 @@ class CollaborationClient:
         """Enable video streaming"""
         if not self.video_enabled:
             if self.video_capture.start_capture(self.server_ip):
+                # The receiver thread is already started during connect, so we only start the sender
+                threading.Thread(target=self.video_capture.udp_sender_thread, daemon=True).start()
                 self.video_enabled = True
                 print("[CLIENT] Video enabled")
     

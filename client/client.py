@@ -1,6 +1,7 @@
 """
 Main Client Application
 Manages connection and coordinates all client modules
+FIXED: File transfer blocking and threading issues
 """
 
 import socket
@@ -54,6 +55,9 @@ class CollaborationClient:
         
         # Running flag
         self.running = False
+        
+        # Lock for socket operations
+        self.socket_lock = threading.Lock()
     
     def connect(self, username, server_ip):
         """Connect to server"""
@@ -92,6 +96,8 @@ class CollaborationClient:
                 
         except Exception as e:
             print(f"[CLIENT] Connection error: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def receive_messages(self):
@@ -112,13 +118,21 @@ class CollaborationClient:
                     print(f"[CLIENT] Users online: {users}")
                 
                 elif msg_type == MSG_FILE_INFO:
-                    file_id = data.get('file_id')
-                    filename = data.get('filename')
-                    size = data.get('size')
-                    uploader = data.get('uploader')
-                    
-                    if self.gui:
-                        self.gui.add_file_to_list(file_id, filename, size, uploader)
+                    # Check if it's an error or file availability notification
+                    if 'error' in data:
+                        print(f"[CLIENT] File error: {data['error']}")
+                    else:
+                        file_id = data.get('file_id')
+                        filename = data.get('filename')
+                        size = data.get('size')
+                        uploader = data.get('uploader')
+                        
+                        if file_id and filename and size and uploader:
+                            if self.gui:
+                                # Use after() to update GUI from main thread
+                                self.gui.root.after(0, 
+                                    lambda: self.gui.add_file_to_list(file_id, filename, size, uploader)
+                                )
                 
                 elif msg_type == MSG_SCREEN_START:
                     presenter = data.get('presenter')
@@ -132,11 +146,15 @@ class CollaborationClient:
                 elif msg_type == MSG_SCREEN_FRAME:
                     frame_data = data.get('frame')
                     if frame_data:
-                        # Decompress and store frame
-                        import base64
-                        frame_bytes = base64.b64decode(frame_data)
-                        frame = decompress_frame(frame_bytes)
-                        self.shared_screen = frame
+                        try:
+                            # Decompress and store frame in separate thread
+                            threading.Thread(
+                                target=self._decode_screen_frame,
+                                args=(frame_data,),
+                                daemon=True
+                            ).start()
+                        except Exception as e:
+                            print(f"[CLIENT] Screen frame decode error: {e}")
                 
             except Exception as e:
                 if self.running:
@@ -145,12 +163,25 @@ class CollaborationClient:
         
         print("[CLIENT] Receive thread stopped")
     
+    def _decode_screen_frame(self, frame_data):
+        """Decode screen frame in separate thread"""
+        try:
+            import base64
+            frame_bytes = base64.b64decode(frame_data)
+            frame = decompress_frame(frame_bytes)
+            if frame is not None:
+                self.shared_screen = frame
+        except Exception as e:
+            print(f"[CLIENT] Frame decode error: {e}")
+    
     def enable_video(self):
         """Enable video streaming"""
         if not self.video_enabled:
             if self.video_capture.start_capture(self.server_ip):
                 self.video_enabled = True
                 print("[CLIENT] Video enabled")
+                return True
+        return False
     
     def disable_video(self):
         """Disable video streaming"""
@@ -165,6 +196,8 @@ class CollaborationClient:
             if self.audio_capture.start_audio(self.server_ip):
                 self.audio_enabled = True
                 print("[CLIENT] Audio enabled")
+                return True
+        return False
     
     def disable_audio(self):
         """Disable audio streaming"""
@@ -174,73 +207,142 @@ class CollaborationClient:
             print("[CLIENT] Audio disabled")
     
     def start_screen_share(self):
-        """Start screen sharing"""
+        """Start screen sharing - Non-blocking"""
         try:
-            # Request to start sharing
-            send_message(self.socket, MSG_SCREEN_START, {})
+            print("[CLIENT] Requesting screen share...")
             
-            # Wait for response
-            msg_type, data = receive_message(self.socket)
-            if msg_type == MSG_SCREEN_START and data.get('success'):
-                self.screen_capture.start_capture()
-                self.screen_sharing = True
+            # Request to start sharing
+            with self.socket_lock:
+                if not send_message(self.socket, MSG_SCREEN_START, {}):
+                    print("[CLIENT] Failed to send screen start message")
+                    return False
                 
-                # Start sending frames
-                threading.Thread(target=self.send_screen_frames, daemon=True).start()
+                # Wait for response with timeout
+                self.socket.settimeout(5.0)
+                try:
+                    msg_type, data = receive_message(self.socket)
+                finally:
+                    self.socket.settimeout(None)
                 
-                print("[CLIENT] Screen sharing started")
-                return True
-            else:
-                print(f"[CLIENT] Screen sharing failed: {data.get('message')}")
-                return False
+                if msg_type == MSG_SCREEN_START and data.get('success'):
+                    print("[CLIENT] Screen share request approved")
+                    
+                    # Start capturing
+                    if self.screen_capture.start_capture():
+                        self.screen_sharing = True
+                        
+                        # Start sending frames
+                        threading.Thread(target=self.send_screen_frames, daemon=True).start()
+                        
+                        print("[CLIENT] Screen sharing started")
+                        return True
+                    else:
+                        print("[CLIENT] Failed to start screen capture")
+                        return False
+                else:
+                    message = data.get('message', 'Unknown error') if data else 'No response'
+                    print(f"[CLIENT] Screen sharing request denied: {message}")
+                    return False
                 
+        except socket.timeout:
+            print("[CLIENT] Screen share request timeout")
+            return False
         except Exception as e:
             print(f"[CLIENT] Screen share error: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def send_screen_frames(self):
         """Send screen frames to server"""
         import base64
+        frame_count = 0
         
         while self.screen_sharing and self.running:
             try:
                 compressed_frame = self.screen_capture.get_compressed_frame()
+                
                 if compressed_frame:
                     # Encode to base64 for JSON transmission
                     frame_b64 = base64.b64encode(compressed_frame).decode('utf-8')
-                    send_message(self.socket, MSG_SCREEN_FRAME, {'frame': frame_b64})
+                    
+                    # Send with lock to prevent concurrent sends
+                    with self.socket_lock:
+                        if not send_message(self.socket, MSG_SCREEN_FRAME, {'frame': frame_b64}):
+                            print("[CLIENT] Failed to send screen frame")
+                            break
+                    
+                    frame_count += 1
+                    if frame_count % 50 == 0:
+                        print(f"[CLIENT] Sent {frame_count} screen frames")
                 
-                threading.Event().wait(0.1)  # 10 FPS
+                # 10 FPS for screen sharing
+                threading.Event().wait(0.1)
                 
             except Exception as e:
                 print(f"[CLIENT] Screen frame send error: {e}")
                 break
+        
+        print("[CLIENT] Screen frame sender stopped")
     
     def stop_screen_share(self):
         """Stop screen sharing"""
         if self.screen_sharing:
+            print("[CLIENT] Stopping screen share...")
             self.screen_sharing = False
             self.screen_capture.stop_capture()
-            send_message(self.socket, MSG_SCREEN_STOP, {})
+            
+            # Send stop message
+            try:
+                with self.socket_lock:
+                    send_message(self.socket, MSG_SCREEN_STOP, {})
+            except Exception as e:
+                print(f"[CLIENT] Error sending stop message: {e}")
+            
             print("[CLIENT] Screen sharing stopped")
     
     def send_chat_message(self, message):
         """Send chat message"""
-        self.chat_client.send_message(message)
+        try:
+            self.chat_client.send_message(message)
+            return True
+        except Exception as e:
+            print(f"[CLIENT] Chat send error: {e}")
+            return False
     
     def on_chat_message(self, username, message, timestamp):
         """Callback for received chat message"""
         if self.gui:
-            self.gui.add_chat_message(username, message, timestamp)
+            # Update GUI from main thread
+            self.gui.root.after(0, 
+                lambda: self.gui.add_chat_message(username, message, timestamp)
+            )
     
     def upload_file(self, filepath):
-        """Upload file to server"""
-        success, message = self.file_client.upload_file(filepath)
-        return success
+        """Upload file to server - Thread-safe"""
+        try:
+            print(f"[CLIENT] Starting file upload: {filepath}")
+            success, message = self.file_client.upload_file(filepath)
+            print(f"[CLIENT] Upload result: {message}")
+            return success
+        except Exception as e:
+            print(f"[CLIENT] Upload error: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
     
     def download_file(self, file_id, save_path):
-        """Download file from server"""
-        return self.file_client.download_file(file_id, save_path)
+        """Download file from server - Thread-safe"""
+        try:
+            print(f"[CLIENT] Starting file download: {file_id}")
+            success, message = self.file_client.download_file(file_id, save_path)
+            print(f"[CLIENT] Download result: {message}")
+            return success, message
+        except Exception as e:
+            print(f"[CLIENT] Download error: {e}")
+            import traceback
+            traceback.print_exc()
+            return False, str(e)
     
     def disconnect(self):
         """Disconnect from server"""
@@ -257,13 +359,17 @@ class CollaborationClient:
         
         # Send disconnect message
         try:
-            send_message(self.socket, MSG_DISCONNECT, {})
+            with self.socket_lock:
+                send_message(self.socket, MSG_DISCONNECT, {})
         except:
             pass
         
         # Close socket
         if self.socket:
-            self.socket.close()
+            try:
+                self.socket.close()
+            except:
+                pass
         
         print("[CLIENT] Disconnected")
 
@@ -291,6 +397,8 @@ def main():
     # Create client and connect
     client = CollaborationClient()
     
+    print(f"[CLIENT] Connecting to {server_ip} as {username}...")
+    
     if client.connect(username, server_ip):
         # Show main window
         root.deiconify()
@@ -300,14 +408,20 @@ def main():
         client.gui = gui
         
         # Auto-enable video and audio
+        print("[CLIENT] Enabling video and audio...")
         client.enable_video()
         client.enable_audio()
         
         # Start GUI
         root.protocol("WM_DELETE_WINDOW", lambda: gui.disconnect())
-        root.mainloop()
+        
+        try:
+            root.mainloop()
+        except KeyboardInterrupt:
+            print("\n[CLIENT] Interrupted")
+            client.disconnect()
     else:
-        messagebox.showerror("Connection Failed", "Could not connect to server")
+        messagebox.showerror("Connection Failed", "Could not connect to server.\n\nPlease check:\n- Server is running\n- IP address is correct\n- You're on the same network")
 
 if __name__ == "__main__":
     main()

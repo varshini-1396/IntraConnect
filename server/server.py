@@ -1,6 +1,7 @@
 """
 Main Server Application
 Coordinates all handlers and manages client connections
+FIXED: File upload handling
 """
 
 import socket
@@ -97,7 +98,7 @@ class CollaborationServer:
             self.stop()
     
     def handle_client(self, client_socket, address):
-        """Handle individual client connection"""
+        """Handle individual client connection - FIXED file handling"""
         username = None
         
         try:
@@ -129,11 +130,25 @@ class CollaborationServer:
                         self.chat_handler.handle_chat_message(username, data['message'])
                     
                     elif msg_type == MSG_FILE_INFO:
-                        self.file_handler.handle_file_upload(username, client_socket)
+                        # Handle file upload - run in separate thread to not block
+                        upload_thread = threading.Thread(
+                            target=self.file_handler.handle_file_upload,
+                            args=(username, client_socket),
+                            daemon=True
+                        )
+                        upload_thread.start()
+                        upload_thread.join()  # Wait for upload to complete
                     
                     elif msg_type == MSG_FILE_REQUEST:
                         file_id = data.get('file_id')
-                        self.file_handler.handle_file_download(username, client_socket, file_id)
+                        # Handle file download in separate thread
+                        download_thread = threading.Thread(
+                            target=self.file_handler.handle_file_download,
+                            args=(username, client_socket, file_id),
+                            daemon=True
+                        )
+                        download_thread.start()
+                        download_thread.join()  # Wait for download to complete
                     
                     elif msg_type == MSG_SCREEN_START:
                         success, message = self.screen_handler.start_sharing(username)
@@ -147,13 +162,20 @@ class CollaborationServer:
                     
                     elif msg_type == MSG_SCREEN_FRAME:
                         frame_data = data.get('frame')
-                        self.screen_handler.broadcast_screen_frame(username, frame_data)
+                        # Handle screen frame in separate thread to not block
+                        threading.Thread(
+                            target=self.screen_handler.broadcast_screen_frame,
+                            args=(username, frame_data),
+                            daemon=True
+                        ).start()
                     
                     elif msg_type == MSG_DISCONNECT:
                         break
         
         except Exception as e:
             print(f"[SERVER] Error handling client {username}: {e}")
+            import traceback
+            traceback.print_exc()
         
         finally:
             # Clean up

@@ -1,7 +1,7 @@
 """
 Main Server Application
 Coordinates all handlers and manages client connections
-FIXED: File upload handling
+FIXED: Video visibility and file upload handling
 """
 
 import socket
@@ -98,7 +98,7 @@ class CollaborationServer:
             self.stop()
     
     def handle_client(self, client_socket, address):
-        """Handle individual client connection - FIXED file handling"""
+        """Handle individual client connection"""
         username = None
         
         try:
@@ -118,6 +118,8 @@ class CollaborationServer:
                 # Notify all other clients about new user
                 self.broadcast_user_list()
                 
+                print(f"[SERVER] {username} connected. Total users: {len(user_list)}")
+                
                 # Handle client messages
                 while self.running:
                     msg_type, data = receive_message(client_socket)
@@ -130,25 +132,16 @@ class CollaborationServer:
                         self.chat_handler.handle_chat_message(username, data['message'])
                     
                     elif msg_type == MSG_FILE_INFO:
-                        # Handle file upload - run in separate thread to not block
-                        upload_thread = threading.Thread(
-                            target=self.file_handler.handle_file_upload,
-                            args=(username, client_socket),
-                            daemon=True
-                        )
-                        upload_thread.start()
-                        upload_thread.join()  # Wait for upload to complete
+                        # Handle file upload in current thread but don't block other operations
+                        success = self.file_handler.handle_file_upload(username, client_socket, data)
+                        if success:
+                            print(f"[SERVER] File upload from {username} completed")
+                        else:
+                            print(f"[SERVER] File upload from {username} failed")
                     
                     elif msg_type == MSG_FILE_REQUEST:
                         file_id = data.get('file_id')
-                        # Handle file download in separate thread
-                        download_thread = threading.Thread(
-                            target=self.file_handler.handle_file_download,
-                            args=(username, client_socket, file_id),
-                            daemon=True
-                        )
-                        download_thread.start()
-                        download_thread.join()  # Wait for download to complete
+                        self.file_handler.handle_file_download(username, client_socket, file_id)
                     
                     elif msg_type == MSG_SCREEN_START:
                         success, message = self.screen_handler.start_sharing(username)
@@ -193,6 +186,8 @@ class CollaborationServer:
         """Broadcast updated user list to all clients"""
         user_list = self.session_manager.get_user_list()
         sockets = self.session_manager.get_all_sockets_except()
+        
+        print(f"[SERVER] Broadcasting user list: {user_list}")
         
         for username, sock in sockets:
             try:

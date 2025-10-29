@@ -30,6 +30,8 @@ class VideoHandler:
         self.frames_in_progress = {}  # {username: {frame_id: {...}}}
         self.lock = threading.Lock()
         self.frame_count = {}  # Track frames received per user
+        # Map each username to their last-seen UDP IP (more reliable than TCP addr)
+        self.user_udp_ip = {}  # {username: ip_string}
         
     def start(self):
         """Start video handler"""
@@ -83,6 +85,12 @@ class VideoHandler:
                     
                 username_bytes = packet[2:2+username_len]
                 username = username_bytes.decode('utf-8')
+                # Remember the sender's UDP IP so we can reliably target them later
+                try:
+                    sender_ip = _sender_addr[0]
+                    self.user_udp_ip[username] = sender_ip
+                except Exception:
+                    pass
                 
                 hdr = packet[2+username_len:2+username_len+HDR_BASE_SIZE]
                 try:
@@ -176,6 +184,8 @@ class VideoHandler:
                             continue
                         
                         client_addr = user_data['address']
+                        # Prefer the last-seen UDP IP for this receiver (works for localhost and LAN)
+                        dest_ip = self.user_udp_ip.get(receiver_username, client_addr[0])
                         
                         # Send ALL video streams to this user
                         # IMPORTANT: Each client receives ALL streams (including their own)
@@ -212,7 +222,7 @@ class VideoHandler:
                                     
                                     try:
                                         # Send to client's listening video port to avoid same-host conflicts
-                                        self.video_socket.sendto(packet, (client_addr[0], CLIENT_VIDEO_PORT))
+                                        self.video_socket.sendto(packet, (dest_ip, CLIENT_VIDEO_PORT))
                                     except Exception as e:
                                         if broadcast_count % 150 == 1:
                                             print(f"[VIDEO] Send error ({sender_username} → {receiver_username}): {e}")

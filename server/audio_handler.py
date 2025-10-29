@@ -16,6 +16,8 @@ class AudioHandler:
         self.running = False
         self.audio_buffers = {}  # {username: latest_audio_data}
         self.lock = threading.Lock()
+        # Map each username to their last-seen UDP IP
+        self.user_udp_ip = {}  # {username: ip_string}
         
     def start(self):
         """Start audio handler"""
@@ -40,7 +42,7 @@ class AudioHandler:
         """Receive audio chunks from clients"""
         while self.running:
             try:
-                data, _ = self.audio_socket.recvfrom(BUFFER_SIZE)
+                data, sender_addr = self.audio_socket.recvfrom(BUFFER_SIZE)
                 
                 # Check if packet is long enough to have header
                 if len(data) < 4:
@@ -57,6 +59,11 @@ class AudioHandler:
                     
                     username = data[4:4+username_len].decode('utf-8')
                     audio_data = data[4+username_len:]
+                    # Remember sender UDP IP for reliable return path
+                    try:
+                        self.user_udp_ip[username] = sender_addr[0]
+                    except Exception:
+                        pass
                     
                     if audio_data:  # Only store if there's actual audio data
                         with self.lock:
@@ -93,13 +100,15 @@ class AudioHandler:
                                 continue
                             
                             client_addr = user_data['address']
+                            # Prefer last-seen UDP IP for destination
+                            dest_ip = self.user_udp_ip.get(username, client_addr[0])
                             
                             # Send mixed audio (excluding user's own voice for echo cancellation)
                             user_mixed = self.mix_audio_except(username)
                             if user_mixed is not None:
                                 try:
                                     # Send to client's listening audio port to avoid same-host conflicts
-                                    self.audio_socket.sendto(user_mixed, (client_addr[0], CLIENT_AUDIO_PORT))
+                                    self.audio_socket.sendto(user_mixed, (dest_ip, CLIENT_AUDIO_PORT))
                                 except Exception:
                                     pass
                 

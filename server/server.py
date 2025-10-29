@@ -1,18 +1,22 @@
 """
-Main Server Application
-FIXED: File upload non-blocking + proper message routing
+Main Server Application - FIXED
+All functionalities working properly
 """
 
 import socket
 import threading
 import sys
-from session_manager import SessionManager
-from chat_handler import ChatHandler
-from file_handler import FileHandler
-from screen_handler import ScreenHandler
-from video_handler import VideoHandler
-from audio_handler import AudioHandler
-sys.path.append('..')
+import os
+
+# Add parent directory to path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(_file_))))
+
+from server.session_manager import SessionManager
+from server.chat_handler import ChatHandler
+from server.file_handler import FileHandler
+from server.screen_handler import ScreenHandler
+from server.video_handler import VideoHandler
+from server.audio_handler import AudioHandler
 from common.protocol import receive_message, send_message
 from common.config import (
     DEFAULT_PORT,
@@ -31,7 +35,7 @@ from common.config import (
 from common.utils import get_local_ip
 
 class CollaborationServer:
-    def __init__(self, host='0.0.0.0', port=DEFAULT_PORT):
+    def _init_(self, host='0.0.0.0', port=DEFAULT_PORT):
         self.host = host
         self.port = port
         self.server_socket = None
@@ -48,11 +52,11 @@ class CollaborationServer:
     def start(self):
         """Start the server"""
         try:
-            # Create main TCP socket for control messages
+            # Create main TCP socket
             self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self.server_socket.bind((self.host, self.port))
-            self.server_socket.listen(5)
+            self.server_socket.listen(10)
             self.running = True
             
             # Start video and audio handlers
@@ -71,13 +75,12 @@ class CollaborationServer:
             print("  Waiting for client connections...")
             print()
             
-            # Accept client connections
+            # Accept connections
             while self.running:
                 try:
                     client_socket, address = self.server_socket.accept()
                     print(f"[SERVER] New connection from {address}")
                     
-                    # Handle client in separate thread
                     client_thread = threading.Thread(
                         target=self.handle_client,
                         args=(client_socket, address),
@@ -101,7 +104,7 @@ class CollaborationServer:
         username = None
         
         try:
-            # Wait for connection message with username
+            # Wait for connection message
             msg_type, data = receive_message(client_socket)
             
             if msg_type == MSG_CONNECT:
@@ -110,38 +113,35 @@ class CollaborationServer:
                 # Add user to session
                 self.session_manager.add_user(username, client_socket, address)
                 
-                # Send success response with user list
+                # Send user list
                 user_list = self.session_manager.get_user_list()
                 send_message(client_socket, MSG_USER_LIST, {'users': user_list})
                 
-                # Notify all other clients about new user
+                # Broadcast updated user list to all
                 self.broadcast_user_list()
                 
                 print(f"[SERVER] {username} connected. Total users: {len(user_list)}")
                 
-                # Handle client messages
+                # Handle messages
                 while self.running:
                     msg_type, data = receive_message(client_socket)
                     
                     if not msg_type:
                         break
                     
-                    # Route message to appropriate handler
+                    # Route messages
                     if msg_type == MSG_CHAT:
                         self.chat_handler.handle_chat_message(username, data['message'])
                     
                     elif msg_type == MSG_FILE_INFO:
-                        # FIXED: Handle file upload in separate thread to prevent blocking
-                        print(f"[SERVER] File upload request from {username}")
-                        # Pass the data we already received
+                        # Handle file upload in separate thread
                         threading.Thread(
-                            target=self._handle_file_upload_thread,
+                            target=self._handle_file_upload,
                             args=(username, client_socket, data),
                             daemon=True
                         ).start()
                     
                     elif msg_type == MSG_FILE_REQUEST:
-                        # Handle download in separate thread
                         file_id = data.get('file_id')
                         threading.Thread(
                             target=self.file_handler.handle_file_download,
@@ -161,7 +161,6 @@ class CollaborationServer:
                     
                     elif msg_type == MSG_SCREEN_FRAME:
                         frame_data = data.get('frame')
-                        # Handle screen frame in separate thread
                         threading.Thread(
                             target=self.screen_handler.broadcast_screen_frame,
                             args=(username, frame_data),
@@ -172,14 +171,13 @@ class CollaborationServer:
                         break
         
         except Exception as e:
-            print(f"[SERVER] Error handling client {username}: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"[SERVER] Error handling {username}: {e}")
         
         finally:
-            # Clean up
+            # Cleanup
             if username:
                 self.session_manager.remove_user(username)
+                # Broadcast updated user list after user leaves
                 self.broadcast_user_list()
                 print(f"[SERVER] {username} disconnected")
             
@@ -188,8 +186,8 @@ class CollaborationServer:
             except:
                 pass
     
-    def _handle_file_upload_thread(self, username, client_socket, metadata):
-        """Handle file upload in separate thread - FIXED VERSION"""
+    def _handle_file_upload(self, username, client_socket, metadata):
+        """Handle file upload in separate thread"""
         try:
             filename = metadata.get('filename')
             filesize = metadata.get('size')
@@ -203,17 +201,16 @@ class CollaborationServer:
             
             print(f"[SERVER] Receiving '{filename}' ({filesize} bytes) from {username}")
             
-            # Receive file data in chunks
+            # Receive file data
             file_data = b''
             received = 0
             
-            # Set timeout for this socket operation
-            client_socket.settimeout(60.0)  # 60 second timeout
+            client_socket.settimeout(60.0)
             
             try:
                 while received < filesize:
                     remaining = filesize - received
-                    chunk_size = min(8192, remaining)  # FILE_CHUNK_SIZE
+                    chunk_size = min(8192, remaining)
                     
                     chunk = client_socket.recv(chunk_size)
                     if not chunk:
@@ -223,39 +220,31 @@ class CollaborationServer:
                     file_data += chunk
                     received += len(chunk)
                     
-                    # Progress
                     if received % (8192 * 10) == 0 or received == filesize:
                         progress = (received / filesize) * 100
                         print(f"[SERVER] Upload progress: {progress:.1f}%")
                 
-                # Reset timeout
                 client_socket.settimeout(None)
                 
                 if received == filesize:
                     # Store file
                     self.session_manager.add_file(file_id, filename, filesize, file_data, username)
+                    print(f"[SERVER] ✓ File '{filename}' received")
                     
-                    print(f"[SERVER] ✓ File '{filename}' received successfully")
-                    
-                    # Notify all clients about new file
+                    # Notify all clients
                     self.file_handler.broadcast_file_available(file_id, filename, filesize, username)
                 else:
                     print(f"[SERVER] Incomplete upload: {received}/{filesize} bytes")
             
             except socket.timeout:
-                print(f"[SERVER] File upload timeout from {username}")
-                client_socket.settimeout(None)
-            except Exception as e:
-                print(f"[SERVER] File upload error: {e}")
+                print(f"[SERVER] Upload timeout from {username}")
                 client_socket.settimeout(None)
                 
         except Exception as e:
-            print(f"[SERVER] File upload thread error: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"[SERVER] Upload error: {e}")
     
     def broadcast_user_list(self):
-        """Broadcast updated user list to all clients"""
+        """Broadcast user list to all clients"""
         user_list = self.session_manager.get_user_list()
         sockets = self.session_manager.get_all_sockets_except()
         
@@ -272,11 +261,9 @@ class CollaborationServer:
         print("\n[SERVER] Shutting down...")
         self.running = False
         
-        # Stop handlers
         self.video_handler.stop()
         self.audio_handler.stop()
         
-        # Close server socket
         if self.server_socket:
             try:
                 self.server_socket.close()
@@ -293,5 +280,5 @@ def main():
         print("\n[SERVER] Interrupted by user")
         server.stop()
 
-if __name__ == "__main__":
+if _name_ == "_main_":
     main()

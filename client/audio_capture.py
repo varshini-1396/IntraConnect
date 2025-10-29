@@ -10,12 +10,12 @@ import struct
 import sys
 import os
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(_file_))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from common.config import AUDIO_PORT, AUDIO_CHUNK, AUDIO_FORMAT, AUDIO_CHANNELS, AUDIO_RATE, BUFFER_SIZE
 
 class AudioCapture:
-    def _init_(self, username):
+    def __init__(self, username):
         self.username = username
         self.audio = None
         self.stream_in = None

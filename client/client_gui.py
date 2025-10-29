@@ -4,6 +4,7 @@ Key changes:
 - Show local preview only when video is ON
 - Show all OTHER users' videos (received from server)
 - Clean grid organization
+- Screen scaling fix
 """
 
 import tkinter as tk
@@ -13,6 +14,7 @@ import time
 from PIL import Image, ImageTk
 import cv2
 import sys
+import numpy as np
 sys.path.append('..')
 from common.utils import format_file_size
 
@@ -50,6 +52,10 @@ class CollaborationGUI:
         # Screen sharing
         self.screen_canvas = None
         self._screen_cleared = False
+
+        # New: Pending file paths for transfer coordination (used by client.py)
+        self.pending_upload_path = None
+        self.pending_download_path = None
         
         # Initialize UI
         self.create_ui()
@@ -74,14 +80,14 @@ class CollaborationGUI:
         )
         title_label.pack(side=tk.LEFT, padx=20, pady=10)
         
-        self.user_label = tk.Label(
+        user_label = tk.Label(
             header,
             text=f"👤 {self.client.username}",
             font=('Segoe UI', 12),
             bg=self.colors['bg_medium'],
             fg=self.colors['text_light']
         )
-        self.user_label.pack(side=tk.LEFT, padx=10)
+        user_label.pack(side=tk.LEFT, padx=10)
         
         # Control buttons
         controls_frame = tk.Frame(header, bg=self.colors['bg_medium'])
@@ -266,20 +272,6 @@ class CollaborationGUI:
         self.chat_input.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, ipady=8, padx=(0, 5))
         self.chat_input.bind('<Return>', lambda e: self.send_chat_message())
         
-        # Attach file icon button (WhatsApp-style)
-        attach_btn = tk.Button(
-            chat_input_frame,
-            text="📎",
-            command=self.upload_file,
-            bg=self.colors['bg_light'],
-            fg=self.colors['text_light'],
-            font=('Segoe UI', 12, 'bold'),
-            bd=0,
-            width=3,
-            cursor='hand2'
-        )
-        attach_btn.pack(side=tk.RIGHT, padx=(0,5))
-
         send_btn = tk.Button(
             chat_input_frame,
             text="➤",
@@ -364,13 +356,6 @@ class CollaborationGUI:
         )
         self.status_label.pack(side=tk.BOTTOM, fill=tk.X)
     
-    def update_username(self, new_username):
-        """Update displayed username in header"""
-        try:
-            self.user_label.config(text=f"👤 {new_username}")
-        except Exception:
-            pass
-    
     def update_ui_thread(self):
         """Continuously update UI"""
         last_update = time.time()
@@ -393,28 +378,32 @@ class CollaborationGUI:
                 time.sleep(0.1)
     
     def update_video_displays(self):
-        """Update video displays - FIXED for Zoom-like behavior"""
+        """Update video displays - FIXED for dynamic user list cleanup (Problem 2)"""
         try:
+            # 1. Get current active users
+            active_users = set(self.client.get_active_users())
+            
             # Track who should be visible
             visible_users = set()
             
-            # 1. Show local preview ONLY if video is enabled
+            # 2. Show local preview ONLY if video is enabled
             if self.client.video_enabled and self.client.video_capture:
                 local_frame = self.client.video_capture.get_local_frame()
                 if local_frame is not None:
                     self.display_video_frame("You (Preview)", local_frame)
                     visible_users.add("You (Preview)")
             
-            # 2. Show ALL remote users (other participants)
+            # 3. Show ALL remote users (other participants)
             if self.client.video_capture:
                 remote_frames = self.client.video_capture.get_remote_frames()
                 
                 for username, frame in remote_frames.items():
-                    if frame is not None:
+                    # Only display remote users who are still active in the session
+                    if username in active_users and frame is not None:
                         self.display_video_frame(username, frame)
                         visible_users.add(username)
             
-            # 3. Remove users who disconnected or turned off video
+            # 4. Remove users who disconnected or turned off video
             current_canvases = set(self.video_canvases.keys())
             users_to_remove = current_canvases - visible_users
             
@@ -517,7 +506,7 @@ class CollaborationGUI:
             self.video_frames[username].grid(row=row, column=col)
     
     def update_screen_display(self):
-        """Update screen sharing display"""
+        """Update screen sharing display - FIXED for proportional scaling (Problem 5)"""
         try:
             if self.client.shared_screen is not None:
                 frame = self.client.shared_screen
@@ -526,25 +515,28 @@ class CollaborationGUI:
                 canvas_height = self.screen_canvas.winfo_height()
                 
                 if canvas_width > 1 and canvas_height > 1:
-                    # Preserve aspect ratio while fitting inside canvas
-                    fh, fw = frame.shape[:2]
-                    if fw == 0 or fh == 0:
-                        return
-                    aspect = fw / fh
-                    target_w, target_h = canvas_width, canvas_height
-                    if target_w / target_h > aspect:
-                        # Limited by height
-                        new_h = target_h
-                        new_w = int(new_h * aspect)
-                    else:
-                        # Limited by width
-                        new_w = target_w
-                        new_h = int(new_w / aspect)
+                    # Calculate proportional dimensions
+                    frame_h, frame_w, _ = frame.shape
+                    
+                    scale_w = canvas_width / frame_w
+                    scale_h = canvas_height / frame_h
+                    
+                    # Use the smaller scale factor to fit the image
+                    scale_factor = min(scale_w, scale_h)
+                    
+                    new_w = int(frame_w * scale_factor)
+                    new_h = int(frame_h * scale_factor)
+                    
+                    # Resize the frame
                     frame_resized = cv2.resize(frame, (new_w, new_h))
                     frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
                     
                     img = Image.fromarray(frame_rgb)
                     photo = ImageTk.PhotoImage(image=img)
+                    
+                    # Calculate position to center the image
+                    x_pos = (canvas_width - new_w) // 2
+                    y_pos = (canvas_height - new_h) // 2
                     
                     if not hasattr(self.screen_canvas, 'screen_image_id'):
                         self.screen_canvas.screen_image_id = None
@@ -552,17 +544,12 @@ class CollaborationGUI:
                     if self.screen_canvas.screen_image_id is None:
                         self.screen_canvas.delete("all")
                         self.screen_canvas.screen_image_id = self.screen_canvas.create_image(
-                            0, 0, anchor=tk.NW, image=photo
+                            x_pos, y_pos, anchor=tk.NW, image=photo
                         )
                     else:
+                        self.screen_canvas.coords(self.screen_canvas.screen_image_id, x_pos, y_pos)
                         self.screen_canvas.itemconfig(self.screen_canvas.screen_image_id, image=photo)
                     
-                    # Center the image
-                    self.screen_canvas.coords(
-                        self.screen_canvas.screen_image_id,
-                        (canvas_width - frame_resized.shape[1]) // 2,
-                        (canvas_height - frame_resized.shape[0]) // 2
-                    )
                     self.screen_canvas.image = photo
                     self._screen_cleared = False
             else:
@@ -607,26 +594,33 @@ class CollaborationGUI:
         self.chat_display.insert(tk.END, f"[{timestamp}] ", "timestamp")
         self.chat_display.insert(tk.END, f"{prefix}: ", color_tag)
         self.chat_display.insert(tk.END, f"{message}\n")
-        # Slight separation between messages
-        self.chat_display.insert(tk.END, "\n")
         self.chat_display.see(tk.END)
         self.chat_display.config(state=tk.DISABLED)
     
     def upload_file(self):
         filepath = filedialog.askopenfilename(title="Select file to upload")
         if filepath:
+            # Threading here only initiates the request
             threading.Thread(target=self._upload_file_thread, args=(filepath,), daemon=True).start()
     
     def _upload_file_thread(self, filepath):
+        """Initiate upload request and store path for later transfer"""
         try:
+            # client.upload_file sets self.client.gui.pending_upload_path internally
             success = self.client.upload_file(filepath)
-            if success:
-                self.root.after(0, lambda: messagebox.showinfo("Success", "File uploaded!"))
-            else:
-                self.root.after(0, lambda: messagebox.showerror("Error", "Upload failed"))
+            if not success:
+                self.root.after(0, lambda: messagebox.showerror("Error", "Upload failed to initiate."))
+            # Success/failure notification for the transfer is handled by handle_upload_result
         except Exception as e:
             self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
-    
+
+    def handle_upload_result(self, success, message, filename):
+        """Callback to handle the actual file transfer result (ran in main thread via after)"""
+        if success:
+            messagebox.showinfo("Success", f"File '{filename}' uploaded successfully!")
+        else:
+            messagebox.showerror("Error", message)
+
     def download_file(self):
         selection = self.file_listbox.curselection()
         if not selection:
@@ -634,46 +628,41 @@ class CollaborationGUI:
             return
         
         index = selection[0]
-        file_info = list(self.client.file_client.available_files.items())[index]
-        file_id = file_info[0]
+        file_info_list = list(self.client.file_client.available_files.items())
+        
+        if index >= len(file_info_list):
+            messagebox.showerror("Error", "Invalid file selection.")
+            return
+
+        file_id = file_info_list[index][0]
         
         save_dir = filedialog.askdirectory(title="Select download location")
         if save_dir:
+            # Threading here only initiates the request
             threading.Thread(target=self._download_file_thread, args=(file_id, save_dir), daemon=True).start()
     
     def _download_file_thread(self, file_id, save_dir):
+        """Initiate download request and store path for later transfer"""
         try:
+            # client.download_file sets self.client.gui.pending_download_path internally
             success, message = self.client.download_file(file_id, save_dir)
-            if success:
-                self.root.after(0, lambda: messagebox.showinfo("Success", message))
-            else:
+            if not success:
                 self.root.after(0, lambda: messagebox.showerror("Error", message))
+            # Success/failure notification for the transfer is handled by handle_download_result
         except Exception as e:
             self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
     
+    def handle_download_result(self, success, message):
+        """Callback to handle the actual file transfer result (ran in main thread via after)"""
+        if success:
+            messagebox.showinfo("Success", message)
+        else:
+            messagebox.showerror("Error", message)
+
     def add_file_to_list(self, file_id, filename, size, uploader):
         self.client.file_client.add_available_file(file_id, filename, size, uploader)
         display_text = f"📄 {filename} ({format_file_size(size)}) - {uploader}"
         self.file_listbox.insert(tk.END, display_text)
-    
-    def add_file_message(self, file_id, filename, size, uploader):
-        """Append a clickable file item to the chat like WhatsApp"""
-        self.chat_display.config(state=tk.NORMAL)
-        # Create a unique tag per file
-        tag = f"file_{file_id}"
-        self.chat_display.tag_config(tag, foreground=self.colors['success'], underline=True)
-        self.chat_display.tag_bind(tag, '<Button-1>', lambda e, fid=file_id: self._download_from_chat(fid))
-        
-        self.chat_display.insert(tk.END, f"[{uploader}] shared ")
-        self.chat_display.insert(tk.END, f"{filename}", tag)
-        self.chat_display.insert(tk.END, f" ({format_file_size(size)})\n\n")
-        self.chat_display.config(state=tk.DISABLED)
-        self.chat_display.see(tk.END)
-    
-    def _download_from_chat(self, file_id):
-        save_dir = filedialog.askdirectory(title="Select download location")
-        if save_dir:
-            self._download_file_thread(file_id, save_dir)
     
     def toggle_video(self):
         if self.client.video_enabled:

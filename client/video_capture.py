@@ -11,7 +11,7 @@ import struct
 import time
 import sys
 sys.path.append('..')
-from common.config import VIDEO_PORT, CLIENT_VIDEO_PORT, VIDEO_WIDTH, VIDEO_HEIGHT, VIDEO_FPS
+from common.config import VIDEO_PORT, VIDEO_WIDTH, VIDEO_HEIGHT, VIDEO_FPS
 
 # UDP Streaming Configuration
 CHUNK_SIZE = 60000
@@ -30,18 +30,12 @@ class VideoCapture:
         self.server_address = None
         self.local_frame = None  # For preview only
         self.remote_frames = {}  # {username: frame} - OTHER users only
-        self._last_seen = {}     # {username: timestamp}
         self.lock = threading.Lock()
         
         # UDP streaming
         self.frame_id = 0
         self.received_frame_count = 0
         self.frames_in_progress = {}  # {username: {frame_id: {...}}}
-        
-    def set_username(self, new_username):
-        """Update the username used for tagging and filtering frames"""
-        with self.lock:
-            self.username = new_username
         
     def start_capture(self, server_ip):
         """Start capturing and sending video using UDP streaming"""
@@ -130,9 +124,9 @@ class VideoCapture:
         """Receive video from server (all other users)"""
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind(('0.0.0.0', CLIENT_VIDEO_PORT))
+        sock.bind(('0.0.0.0', VIDEO_PORT))
         sock.settimeout(0.5)
-        print("[VIDEO] Receiver listening on port", CLIENT_VIDEO_PORT)
+        print("[VIDEO] Receiver listening on port", VIDEO_PORT)
 
         try:
             while self.running:
@@ -203,8 +197,6 @@ class VideoCapture:
                         if frame is not None:
                             with self.lock:
                                 self.remote_frames[username] = frame
-                                import time as _t
-                                self._last_seen[username] = _t.time()
                                 self.received_frame_count += 1
                                 # Debug print
                                 if self.received_frame_count % 60 == 1:
@@ -229,25 +221,10 @@ class VideoCapture:
             return None
     
     def get_remote_frames(self):
-        """Get all remote video frames (other users only), removing stale entries"""
-        import time as _t
-        stale_after = 3.0  # seconds without frames → consider user gone
+        """Get all remote video frames (other users only)"""
         with self.lock:
-            now = _t.time()
-            stale_users = [u for u, ts in self._last_seen.items() if now - ts > stale_after]
-            for u in stale_users:
-                self.remote_frames.pop(u, None)
-                self._last_seen.pop(u, None)
             return self.remote_frames.copy()
     
-    def prune_users(self, allowed_users):
-        """Remove any remote frames for users not in allowed_users"""
-        with self.lock:
-            to_remove = [u for u in list(self.remote_frames.keys()) if u not in allowed_users]
-            for u in to_remove:
-                self.remote_frames.pop(u, None)
-                self._last_seen.pop(u, None)
-
     def stop_capture(self):
         """Stop video capture"""
         self.running = False

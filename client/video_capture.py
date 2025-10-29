@@ -200,9 +200,11 @@ class VideoCapture:
                                 self.remote_frames[username] = frame
                                 self.received_frame_count += 1
                                 # Debug print
-                                if self.received_frame_count % 90 == 1:
-                                    print(f"[VIDEO] ✓ Frames: {self.received_frame_count}, "
-                                          f"Users visible: {list(self.remote_frames.keys())}")
+                                if self.received_frame_count % 60 == 1:
+                                    print(f"[VIDEO CLIENT] ✓ Received frame from '{username}'")
+                                    print(f"[VIDEO CLIENT] Total frames received: {self.received_frame_count}")
+                                    print(f"[VIDEO CLIENT] Remote users visible: {list(self.remote_frames.keys())}")
+                                    print(f"[VIDEO CLIENT] My username (filtered): '{self.username}'")
                     except Exception as e:
                         print(f"[VIDEO] Decode error: {e}")
                     frames.pop(frame_id, None)

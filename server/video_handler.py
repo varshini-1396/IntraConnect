@@ -1,6 +1,6 @@
 """
-Video Handler - Manages video streaming using UDP with frame splitting
-FIXED: Everyone can see everyone's video
+Video Handler - FIXED with detailed logging
+Key fix: Ensure ALL users receive ALL video streams
 """
 
 import socket
@@ -17,7 +17,7 @@ FRAME_TIMEOUT = 2.0
 JPEG_QUALITY = 70
 
 # Packet header format
-HDR_BASE_FMT = "!QIIH"  # frame_id (Q), total_pkts (I), pkt_idx (I), payload_len (H)
+HDR_BASE_FMT = "!QIIH"
 HDR_BASE_SIZE = struct.calcsize(HDR_BASE_FMT)
 
 class VideoHandler:
@@ -29,6 +29,7 @@ class VideoHandler:
         self.video_streams = {}  # {username: latest_frame_data}
         self.frames_in_progress = {}  # {username: {frame_id: {...}}}
         self.lock = threading.Lock()
+        self.frame_count = {}  # Track frames received per user
         
     def start(self):
         """Start video handler"""
@@ -51,7 +52,7 @@ class VideoHandler:
             return False
     
     def receive_video(self):
-        """Receive UDP packets with frame splitting, reassemble frames"""
+        """Receive UDP packets from clients"""
         
         while self.running:
             try:
@@ -95,6 +96,8 @@ class VideoHandler:
                 with self.lock:
                     if username not in self.frames_in_progress:
                         self.frames_in_progress[username] = {}
+                        self.frame_count[username] = 0
+                        
                     frames = self.frames_in_progress[username]
                     
                     if frame_id not in frames:
@@ -123,9 +126,12 @@ class VideoHandler:
                             if frame is not None:
                                 # Store complete frame
                                 self.video_streams[username] = frame
-                                # Print occasionally for debugging
-                                if frame_id % 60 == 0:
-                                    print(f"[VIDEO] Received frame from {username}, total streams: {list(self.video_streams.keys())}")
+                                self.frame_count[username] += 1
+                                
+                                # Debug logging
+                                if self.frame_count[username] % 60 == 1:
+                                    print(f"[VIDEO] ✓ Received frame #{self.frame_count[username]} from '{username}'")
+                                    print(f"[VIDEO] Current streams: {list(self.video_streams.keys())}")
                         except Exception as e:
                             print(f"[VIDEO] Decode error: {e}")
                         # Remove completed frame
@@ -136,9 +142,9 @@ class VideoHandler:
                     print(f"[VIDEO] Receive error: {e}")
     
     def broadcast_video(self):
-        """Broadcast all video streams to all clients - FIXED VERSION"""
-        frame_ids = {}  # Track frame IDs per sender-receiver pair
-        last_debug_print = time.time()
+        """Broadcast all video streams to all clients"""
+        frame_ids = {}
+        broadcast_count = 0
         
         while self.running:
             try:
@@ -150,15 +156,20 @@ class VideoHandler:
                     # Get all connected users
                     users = self.session_manager.get_user_list()
                     
-                    # Debug print every 5 seconds
-                    current_time = time.time()
-                    if current_time - last_debug_print > 5.0:
-                        print(f"[VIDEO] Broadcasting: {len(self.video_streams)} streams to {len(users)} users")
-                        print(f"[VIDEO] Streams from: {list(self.video_streams.keys())}")
-                        print(f"[VIDEO] Sending to: {users}")
-                        last_debug_print = current_time
+                    if not users:
+                        time.sleep(0.1)
+                        continue
                     
-                    # For each user that should receive video
+                    broadcast_count += 1
+                    
+                    # Debug logging every 5 seconds (150 frames at 30fps)
+                    if broadcast_count % 150 == 1:
+                        print(f"\n[VIDEO] === BROADCAST STATUS ===")
+                        print(f"[VIDEO] Streams available: {list(self.video_streams.keys())}")
+                        print(f"[VIDEO] Connected users: {users}")
+                        print(f"[VIDEO] Will send each stream to each user")
+                    
+                    # For each receiving user
                     for receiver_username in users:
                         user_data = self.session_manager.users.get(receiver_username)
                         if not user_data:
@@ -167,18 +178,16 @@ class VideoHandler:
                         client_addr = user_data['address']
                         
                         # Send ALL video streams to this user
-                        # IMPORTANT: Each user receives everyone's video INCLUDING their own
-                        # The client will filter out their own video in the display
+                        # IMPORTANT: Each client receives ALL streams (including their own)
+                        # The CLIENT will filter out their own username
                         for sender_username, frame in self.video_streams.items():
-                            # Create unique key for this stream
                             frame_key = f"{sender_username}-{receiver_username}"
                             
-                            # Initialize frame ID counter
                             if frame_key not in frame_ids:
                                 frame_ids[frame_key] = 0
                             
                             try:
-                                # Encode frame to JPEG
+                                # Encode frame
                                 ok, enc = cv2.imencode('.jpg', frame, 
                                                       [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
                                 if not ok:
@@ -186,18 +195,17 @@ class VideoHandler:
                                 
                                 payload = enc.tobytes()
                                 total_len = len(payload)
-                                
-                                # Split into chunks
                                 total_pkts = (total_len + CHUNK_SIZE - 1) // CHUNK_SIZE
                                 offset = 0
                                 frame_id = frame_ids[frame_key]
                                 
+                                # Send chunks
                                 for pkt_idx in range(total_pkts):
                                     chunk = payload[offset:offset+CHUNK_SIZE]
                                     offset += CHUNK_SIZE
                                     hdr = struct.pack(HDR_BASE_FMT, frame_id, total_pkts, pkt_idx, len(chunk))
                                     
-                                    # Prepend username to packet
+                                    # Prepend sender username to packet
                                     username_bytes = sender_username.encode('utf-8')
                                     username_header = struct.pack('!H', len(username_bytes)) + username_bytes
                                     packet = username_header + hdr + chunk
@@ -205,14 +213,19 @@ class VideoHandler:
                                     try:
                                         self.video_socket.sendto(packet, (client_addr[0], VIDEO_PORT))
                                     except Exception as e:
-                                        print(f"[VIDEO] Sendto error ({sender_username} -> {receiver_username}): {e}")
+                                        if broadcast_count % 150 == 1:
+                                            print(f"[VIDEO] Send error ({sender_username} → {receiver_username}): {e}")
                                 
                                 frame_ids[frame_key] = (frame_ids[frame_key] + 1) & 0xFFFFFFFFFFFFFFFF
                                 
+                                # Debug logging
+                                if broadcast_count % 150 == 1:
+                                    print(f"[VIDEO] ✓ Sent {sender_username}'s video → {receiver_username} at {client_addr[0]}")
+                                
                             except Exception as e:
-                                print(f"[VIDEO] Broadcast encode error: {e}")
+                                print(f"[VIDEO] Encode error: {e}")
                 
-                time.sleep(0.033)  # ~30 FPS broadcast rate
+                time.sleep(0.033)  # ~30 FPS
                 
             except Exception as e:
                 if self.running:

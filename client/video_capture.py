@@ -9,7 +9,6 @@ import threading
 import socket
 import struct
 import time
-import queue
 import sys
 sys.path.append('..')
 from common.config import VIDEO_PORT, VIDEO_WIDTH, VIDEO_HEIGHT, VIDEO_FPS

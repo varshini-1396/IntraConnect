@@ -7,7 +7,7 @@ Key changes:
 """
 
 import tkinter as tk
-from tkinter import scrolledtext, filedialog, messagebox, ttk
+from tkinter import scrolledtext, filedialog, messagebox
 import threading
 import time
 from PIL import Image, ImageTk
@@ -538,7 +538,7 @@ class CollaborationGUI:
                     self._screen_cleared = True
                     self.screen_canvas.screen_image_id = None
         
-        except Exception as e:
+        except Exception:
             if self.running:
                 pass  # Suppress errors
     

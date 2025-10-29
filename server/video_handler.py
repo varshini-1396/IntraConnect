@@ -57,7 +57,7 @@ class VideoHandler:
         while self.running:
             try:
                 try:
-                    packet, sender_addr = self.video_socket.recvfrom(CHUNK_SIZE + HDR_BASE_SIZE + 64)
+                    packet, _sender_addr = self.video_socket.recvfrom(CHUNK_SIZE + HDR_BASE_SIZE + 64)
                 except socket.timeout:
                     # Cleanup stale frames
                     now = time.time()
@@ -164,10 +164,10 @@ class VideoHandler:
                     
                     # Debug logging every 5 seconds (150 frames at 30fps)
                     if broadcast_count % 150 == 1:
-                        print(f"\n[VIDEO] === BROADCAST STATUS ===")
+                        print("\n[VIDEO] === BROADCAST STATUS ===")
                         print(f"[VIDEO] Streams available: {list(self.video_streams.keys())}")
                         print(f"[VIDEO] Connected users: {users}")
-                        print(f"[VIDEO] Will send each stream to each user")
+                        print("[VIDEO] Will send each stream to each user")
                     
                     # For each receiving user
                     for receiver_username in users:

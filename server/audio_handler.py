@@ -99,7 +99,7 @@ class AudioHandler:
                             if user_mixed is not None:
                                 try:
                                     self.audio_socket.sendto(user_mixed, (client_addr[0], AUDIO_PORT))
-                                except:
+                                except Exception:
                                     pass
                 
                 threading.Event().wait(0.02)  # 50Hz broadcast rate
@@ -116,7 +116,7 @@ class AudioHandler:
             
             # Convert all audio data to numpy arrays
             audio_arrays = []
-            for username, audio_data in self.audio_buffers.items():
+            for _, audio_data in self.audio_buffers.items():
                 audio_array = np.frombuffer(audio_data, dtype=np.int16)
                 audio_arrays.append(audio_array)
             
@@ -161,7 +161,7 @@ class AudioHandler:
             mixed = np.clip(mixed, -32768, 32767).astype(np.int16)
             return mixed.tobytes()
             
-        except:
+        except Exception:
             return None
     
     def stop(self):

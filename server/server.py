@@ -9,14 +9,14 @@ import sys
 import os
 
 # Add parent directory to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(_file_))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from server.session_manager import SessionManager
-from server.chat_handler import ChatHandler
-from server.file_handler import FileHandler
-from server.screen_handler import ScreenHandler
-from server.video_handler import VideoHandler
-from server.audio_handler import AudioHandler
+from session_manager import SessionManager
+from chat_handler import ChatHandler
+from file_handler import FileHandler
+from screen_handler import ScreenHandler
+from video_handler import VideoHandler
+from audio_handler import AudioHandler
 from common.protocol import receive_message, send_message
 from common.config import (
     DEFAULT_PORT,
@@ -35,7 +35,7 @@ from common.config import (
 from common.utils import get_local_ip
 
 class CollaborationServer:
-    def _init_(self, host='0.0.0.0', port=DEFAULT_PORT):
+    def __init__(self, host='0.0.0.0', port=DEFAULT_PORT):
         self.host = host
         self.port = port
         self.server_socket = None
@@ -280,5 +280,5 @@ def main():
         print("\n[SERVER] Interrupted by user")
         server.stop()
 
-if _name_ == "_main_":
+if __name__ == "__main__":
     main()

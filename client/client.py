@@ -127,6 +127,16 @@ class CollaborationClient:
                     if assigned and assigned != self.username:
                         print(f"[CLIENT] Assigned username: {assigned}")
                         self.username = assigned
+                        # Propagate to media modules and GUI
+                        try:
+                            if self.video_capture:
+                                self.video_capture.set_username(assigned)
+                            if self.audio_capture:
+                                self.audio_capture.set_username(assigned)
+                            if self.gui:
+                                self.gui.update_username(assigned)
+                        except Exception:
+                            pass
                     print(f"[CLIENT] Users online: {users}")
                     # Prune any stale remote videos immediately on user list update
                     if self.video_capture:
@@ -150,10 +160,9 @@ class CollaborationClient:
                         
                         if file_id and filename and size and uploader:
                             if self.gui:
-                                # Use after() to update GUI from main thread
-                                self.gui.root.after(0, 
-                                    lambda: self.gui.add_file_to_list(file_id, filename, size, uploader)
-                                )
+                                # Update chat with a clickable file message and keep list in sync
+                                self.gui.root.after(0, lambda: self.gui.add_file_message(file_id, filename, size, uploader))
+                                self.gui.root.after(0, lambda: self.gui.add_file_to_list(file_id, filename, size, uploader))
                 
                 elif msg_type == MSG_SCREEN_START:
                     presenter = data.get('presenter')

@@ -24,6 +24,10 @@ class AudioCapture:
         self.audio_socket = None
         self.server_address = None
         
+    def set_username(self, new_username):
+        """Update the username used in audio packet headers"""
+        self.username = new_username
+        
     def start_audio(self, server_ip):
         """Start audio"""
         try:

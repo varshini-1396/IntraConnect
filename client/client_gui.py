@@ -74,14 +74,14 @@ class CollaborationGUI:
         )
         title_label.pack(side=tk.LEFT, padx=20, pady=10)
         
-        user_label = tk.Label(
+        self.user_label = tk.Label(
             header,
             text=f"👤 {self.client.username}",
             font=('Segoe UI', 12),
             bg=self.colors['bg_medium'],
             fg=self.colors['text_light']
         )
-        user_label.pack(side=tk.LEFT, padx=10)
+        self.user_label.pack(side=tk.LEFT, padx=10)
         
         # Control buttons
         controls_frame = tk.Frame(header, bg=self.colors['bg_medium'])
@@ -363,6 +363,13 @@ class CollaborationGUI:
             pady=8
         )
         self.status_label.pack(side=tk.BOTTOM, fill=tk.X)
+    
+    def update_username(self, new_username):
+        """Update displayed username in header"""
+        try:
+            self.user_label.config(text=f"👤 {new_username}")
+        except Exception:
+            pass
     
     def update_ui_thread(self):
         """Continuously update UI"""
@@ -648,6 +655,25 @@ class CollaborationGUI:
         self.client.file_client.add_available_file(file_id, filename, size, uploader)
         display_text = f"📄 {filename} ({format_file_size(size)}) - {uploader}"
         self.file_listbox.insert(tk.END, display_text)
+    
+    def add_file_message(self, file_id, filename, size, uploader):
+        """Append a clickable file item to the chat like WhatsApp"""
+        self.chat_display.config(state=tk.NORMAL)
+        # Create a unique tag per file
+        tag = f"file_{file_id}"
+        self.chat_display.tag_config(tag, foreground=self.colors['success'], underline=True)
+        self.chat_display.tag_bind(tag, '<Button-1>', lambda e, fid=file_id: self._download_from_chat(fid))
+        
+        self.chat_display.insert(tk.END, f"[{uploader}] shared ")
+        self.chat_display.insert(tk.END, f"{filename}", tag)
+        self.chat_display.insert(tk.END, f" ({format_file_size(size)})\n\n")
+        self.chat_display.config(state=tk.DISABLED)
+        self.chat_display.see(tk.END)
+    
+    def _download_from_chat(self, file_id):
+        save_dir = filedialog.askdirectory(title="Select download location")
+        if save_dir:
+            self._download_file_thread(file_id, save_dir)
     
     def toggle_video(self):
         if self.client.video_enabled:

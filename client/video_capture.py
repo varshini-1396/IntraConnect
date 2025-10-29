@@ -38,6 +38,11 @@ class VideoCapture:
         self.received_frame_count = 0
         self.frames_in_progress = {}  # {username: {frame_id: {...}}}
         
+    def set_username(self, new_username):
+        """Update the username used for tagging and filtering frames"""
+        with self.lock:
+            self.username = new_username
+        
     def start_capture(self, server_ip):
         """Start capturing and sending video using UDP streaming"""
         try:

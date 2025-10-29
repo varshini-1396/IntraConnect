@@ -3,15 +3,18 @@ Configuration file for LAN Collaboration System
 Contains all network and application constants
 """
 
-
 # Network Configuration
 SERVER_HOST = '0.0.0.0'  # Listen on all interfaces
 DEFAULT_PORT = 5555
-VIDEO_PORT = 5556
-AUDIO_PORT = 5557
-FILE_TRANSFER_PORT = 5558  # <-- NEW PORT FOR RAW DATA TRANSFER
-BUFFER_SIZE = 65536
+VIDEO_PORT = 5556          # Server receives client video on this UDP port
+AUDIO_PORT = 5557          # Server receives client audio on this UDP port
 
+# To allow running server and client on the same machine, clients listen on
+# different UDP ports than the server. This avoids bind conflicts on Windows.
+CLIENT_VIDEO_PORT = VIDEO_PORT + 1  # Clients receive video on this port
+CLIENT_AUDIO_PORT = AUDIO_PORT + 1  # Clients receive audio on this port
+
+BUFFER_SIZE = 65536
 
 # Video Configuration - Optimized for UDP streaming
 VIDEO_WIDTH = 640

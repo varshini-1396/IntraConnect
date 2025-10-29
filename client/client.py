@@ -1,7 +1,7 @@
 """
 Main Client Application
 Manages connection and coordinates all client modules
-FIXED: File transfer blocking and threading issues, dynamic user list
+FIXED: File transfer blocking and threading issues
 """
 
 import socket
@@ -9,7 +9,6 @@ import threading
 import tkinter as tk
 from tkinter import simpledialog, messagebox
 import sys
-import os
 sys.path.append('..')
 from common.protocol import send_message, receive_message
 from common.config import (
@@ -18,7 +17,6 @@ from common.config import (
     MSG_USER_LIST,
     MSG_CHAT,
     MSG_FILE_INFO,
-    MSG_FILE_REQUEST,
     MSG_SCREEN_START,
     MSG_SCREEN_STOP,
     MSG_SCREEN_FRAME,
@@ -55,14 +53,13 @@ class CollaborationClient:
         # Shared screen from presenter
         self.shared_screen = None
         
-        # Active user list (Fix for stuck video)
-        self.active_users = []
-        
         # Running flag
         self.running = False
         
         # Lock for socket operations
         self.socket_lock = threading.Lock()
+        # Flag to pause generic receiver during file transfers
+        self._in_file_transfer = threading.Event()
     
     def connect(self, username, server_ip):
         """Connect to server"""
@@ -80,8 +77,7 @@ class CollaborationClient:
             # Wait for response
             msg_type, data = receive_message(self.socket)
             if msg_type == MSG_USER_LIST:
-                self.active_users = data.get('users', [])
-                print(f"[CLIENT] Connected to server. Users online: {self.active_users}")
+                print(f"[CLIENT] Connected to server. Users online: {data['users']}")
                 self.connected = True
                 
                 # Initialize modules
@@ -89,7 +85,7 @@ class CollaborationClient:
                 self.audio_capture = AudioCapture(username)
                 self.screen_capture = ScreenCapture()
                 self.chat_client = ChatClient(self.socket, self.on_chat_message)
-                self.file_client = FileClient(self.socket, server_ip)
+                self.file_client = FileClient(self.socket)
                 
                 # Start receiver thread
                 self.running = True
@@ -110,6 +106,11 @@ class CollaborationClient:
         """Receive messages from server"""
         while self.running:
             try:
+                # If a file transfer is in progress, yield to it
+                if self._in_file_transfer.is_set():
+                    threading.Event().wait(0.05)
+                    continue
+                
                 msg_type, data = receive_message(self.socket)
                 
                 if not msg_type:
@@ -120,17 +121,38 @@ class CollaborationClient:
                     self.chat_client.handle_received_message(data)
                 
                 elif msg_type == MSG_USER_LIST:
-                    self.active_users = data.get('users', [])
-                    print(f"[CLIENT] Users online: {self.active_users}")
+                    users = data.get('users', [])
+                    # Update assigned username if server adjusted it
+                    assigned = data.get('username')
+                    if assigned and assigned != self.username:
+                        print(f"[CLIENT] Assigned username: {assigned}")
+                        self.username = assigned
+                        # Propagate to media modules and GUI
+                        try:
+                            if self.video_capture:
+                                self.video_capture.set_username(assigned)
+                            if self.audio_capture:
+                                self.audio_capture.set_username(assigned)
+                            if self.gui:
+                                self.gui.update_username(assigned)
+                        except Exception:
+                            pass
+                    print(f"[CLIENT] Users online: {users}")
+                    # Prune any stale remote videos immediately on user list update
+                    if self.video_capture:
+                        try:
+                            allowed = set(users)
+                            if self.username in allowed:
+                                allowed.remove(self.username)
+                            self.video_capture.prune_users(allowed)
+                        except Exception:
+                            pass
                 
                 elif msg_type == MSG_FILE_INFO:
-                    # Handle file transfer coordination
-                    status = data.get('status')
+                    # Check if it's an error or file availability notification
                     if 'error' in data:
                         print(f"[CLIENT] File error: {data['error']}")
-                        
-                    elif status == 'AVAILABLE':
-                        # File available notification
+                    else:
                         file_id = data.get('file_id')
                         filename = data.get('filename')
                         size = data.get('size')
@@ -138,40 +160,9 @@ class CollaborationClient:
                         
                         if file_id and filename and size and uploader:
                             if self.gui:
-                                # Use after() to update GUI from main thread
-                                self.gui.root.after(0, 
-                                    lambda: self.gui.add_file_to_list(file_id, filename, size, uploader)
-                                )
-
-                    elif status == 'READY_UPLOAD': # Server tells client to start raw data upload
-                        filename = data.get('filename')
-                        filesize = data.get('size')
-                        ip = data.get('ip')
-                        port = data.get('port')
-                        
-                        # Get path from GUI storage (set by upload_file)
-                        filepath = self.gui.pending_upload_path
-                        
-                        if filepath:
-                            threading.Thread(
-                                target=self._run_upload_transfer,
-                                args=(filename, filesize, filepath, ip, port),
-                                daemon=True
-                            ).start()
-                    
-                    elif status == 'READY_DOWNLOAD': # Server tells client to start raw data download
-                        file_id = data.get('file_id')
-                        filename = data.get('filename')
-                        filesize = data.get('size')
-                        # Get save path from GUI storage (set by download_file)
-                        save_path = self.gui.pending_download_path
-                        
-                        if save_path:
-                            threading.Thread(
-                                target=self._run_download_transfer,
-                                args=(file_id, filename, filesize, save_path),
-                                daemon=True
-                            ).start()
+                                # Update chat with a clickable file message and keep list in sync
+                                self.gui.root.after(0, lambda: self.gui.add_file_message(file_id, filename, size, uploader))
+                                self.gui.root.after(0, lambda: self.gui.add_file_to_list(file_id, filename, size, uploader))
                 
                 elif msg_type == MSG_SCREEN_START:
                     presenter = data.get('presenter')
@@ -201,18 +192,6 @@ class CollaborationClient:
                 break
         
         print("[CLIENT] Receive thread stopped")
-
-    def _run_upload_transfer(self, filename, filesize, filepath, ip, port):
-        """Execute the upload transfer and notify GUI."""
-        success, message = self.file_client._initiate_upload_transfer(filename, filesize, filepath, ip, port)
-        self.gui.root.after(0, lambda: self.gui.handle_upload_result(success, message, filename))
-        self.gui.pending_upload_path = None # Clear path
-
-    def _run_download_transfer(self, file_id, filename, filesize, save_path):
-        """Execute the download transfer and notify GUI."""
-        success, message = self.file_client._initiate_download_transfer(file_id, filename, filesize, save_path)
-        self.gui.root.after(0, lambda: self.gui.handle_download_result(success, message))
-        self.gui.pending_download_path = None # Clear path
     
     def _decode_screen_frame(self, frame_data):
         """Decode screen frame in separate thread"""
@@ -225,10 +204,6 @@ class CollaborationClient:
         except Exception as e:
             print(f"[CLIENT] Frame decode error: {e}")
     
-    def get_active_users(self):
-        """Get the current list of users from the server (Fix for stuck video)"""
-        return self.active_users
-
     def enable_video(self):
         """Enable video streaming"""
         if not self.video_enabled:
@@ -374,33 +349,40 @@ class CollaborationClient:
             )
     
     def upload_file(self, filepath):
-        """Client sends metadata/request over main TCP channel"""
+        """Upload file to server - Thread-safe"""
+        self._in_file_transfer.set()
         try:
             print(f"[CLIENT] Starting file upload: {filepath}")
-            # Store path temporarily for the receiver thread to access
-            self.gui.pending_upload_path = filepath
-            success, message = self.file_client.upload_file(filepath)
-            if not success:
-                 self.gui.pending_upload_path = None # Clear on failure to initiate
+            # Ensure exclusive access to the socket and pause receiver
+            with self.socket_lock:
+                success, message = self.file_client.upload_file(filepath)
+            print(f"[CLIENT] Upload result: {message}")
             return success
         except Exception as e:
             print(f"[CLIENT] Upload error: {e}")
-            self.gui.pending_upload_path = None
+            import traceback
+            traceback.print_exc()
             return False
+        finally:
+            self._in_file_transfer.clear()
     
     def download_file(self, file_id, save_path):
-        """Client sends request over main TCP channel"""
+        """Download file from server - Thread-safe"""
+        self._in_file_transfer.set()
         try:
             print(f"[CLIENT] Starting file download: {file_id}")
-            self.gui.pending_download_path = save_path
-            success, message = self.file_client.download_file(file_id, save_path)
-            if not success:
-                self.gui.pending_download_path = None # Clear on failure to initiate
+            # Ensure exclusive access to the socket and pause receiver
+            with self.socket_lock:
+                success, message = self.file_client.download_file(file_id, save_path)
+            print(f"[CLIENT] Download result: {message}")
             return success, message
         except Exception as e:
             print(f"[CLIENT] Download error: {e}")
-            self.gui.pending_download_path = None
+            import traceback
+            traceback.print_exc()
             return False, str(e)
+        finally:
+            self._in_file_transfer.clear()
     
     def disconnect(self):
         """Disconnect from server"""
@@ -414,9 +396,6 @@ class CollaborationClient:
             self.disable_audio()
         if self.screen_sharing:
             self.stop_screen_share()
-            
-        if self.file_client:
-            self.file_client.stop_listener() # Stop file listener
         
         # Send disconnect message
         try:
@@ -470,7 +449,6 @@ def main():
         
         # Auto-enable video and audio
         print("[CLIENT] Enabling video and audio...")
-        # Note: This might fail if webcam/mic is unavailable, but the client is designed to handle it.
         client.enable_video()
         client.enable_audio()
         

@@ -13,17 +13,24 @@ class SessionManager:
         self.files = {}  # {file_id: {filename, size, data, uploader}}
         
     def add_user(self, username, sock, address):
-        """Add a new user to the session"""
+        """Add a new user to the session; ensure unique username and RETURN the assigned username"""
         with self.lock:
-            self.users[username] = {
+            base = username.strip() or "User"
+            assigned = base
+            suffix = 1
+            while assigned in self.users:
+                suffix += 1
+                assigned = f"{base}_{suffix}"
+            
+            self.users[assigned] = {
                 'socket': sock,
                 'address': address,
                 'connected_at': datetime.now(),
                 'video_active': False,
                 'audio_active': False
             }
-            print(f"[SESSION] User '{username}' joined from {address}")
-            return True
+            print(f"[SESSION] User '{assigned}' joined from {address}")
+            return assigned
     
     def remove_user(self, username):
         """Remove a user from the session"""

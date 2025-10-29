@@ -1,6 +1,6 @@
 """
 Video Capture Module - UDP Streaming Integration
-Handles webcam capture using efficient UDP streaming like your friend's app
+FIXED: Zoom-like video where you see everyone except yourself
 """
 
 import cv2
@@ -15,12 +15,12 @@ sys.path.append('..')
 from common.config import VIDEO_PORT, VIDEO_WIDTH, VIDEO_HEIGHT, VIDEO_FPS
 
 # UDP Streaming Configuration
-CHUNK_SIZE = 60000            # chunk payload size (safe < UDP limit)
-FRAME_TIMEOUT = 2.0           # seconds to wait for missing packets before dropping frame
-JPEG_QUALITY = 70             # encoding quality 0-100
+CHUNK_SIZE = 60000
+FRAME_TIMEOUT = 2.0
+JPEG_QUALITY = 70
 
-# Packet header format: username_len (H), username (str), frame_id (Q), total_pkts (I), pkt_idx (I), payload_len (H)
-HDR_BASE_FMT = "!QIIH"  # frame_id (Q), total_pkts (I), pkt_idx (I), payload_len (H)
+# Packet header format
+HDR_BASE_FMT = "!QIIH"
 HDR_BASE_SIZE = struct.calcsize(HDR_BASE_FMT)
 
 class VideoCapture:
@@ -29,16 +29,14 @@ class VideoCapture:
         self.capture = None
         self.running = False
         self.server_address = None
-        self.local_frame = None
-        self.remote_frames = {}  # {username: frame}
+        self.local_frame = None  # For preview only
+        self.remote_frames = {}  # {username: frame} - OTHER users only
         self.lock = threading.Lock()
         
         # UDP streaming
         self.frame_id = 0
-        self.received_frame_count = 0  # Track received frames for debugging
+        self.received_frame_count = 0
         self.frames_in_progress = {}  # {username: {frame_id: {...}}}
-        self.local_frame_q = queue.Queue(maxsize=2)
-        self.remote_frame_q = queue.Queue(maxsize=2)
         
     def start_capture(self, server_ip):
         """Start capturing and sending video using UDP streaming"""
@@ -52,29 +50,25 @@ class VideoCapture:
             self.capture.set(cv2.CAP_PROP_FRAME_HEIGHT, VIDEO_HEIGHT)
             self.capture.set(cv2.CAP_PROP_FPS, VIDEO_FPS)
             
-            # Server address for sending
             self.server_address = (server_ip, VIDEO_PORT)
-            
             self.running = True
             
-            # Start UDP sender thread (sends to server)
+            # Start sender (sends to server)
             threading.Thread(target=self.udp_sender_thread, daemon=True).start()
-            # Start UDP receiver thread (receives from server)
+            # Start receiver (receives from server)
             threading.Thread(target=self.udp_receiver_thread, daemon=True).start()
             
-            print(f"[VIDEO] UDP video capture started - sending to {self.server_address}, receiving on port {VIDEO_PORT}")
+            print(f"[VIDEO] Started - sending to {self.server_address}")
             return True
             
         except Exception as e:
-            print(f"[VIDEO] Failed to start capture: {e}")
+            print(f"[VIDEO] Failed to start: {e}")
             return False
     
     def udp_sender_thread(self):
-        """Continuously capture frames, encode, split, and send via UDP"""
-        print("[VIDEO] Starting UDP sender to", self.server_address)
-        
+        """Capture and send video to server"""
         if not self.capture.isOpened():
-            print("[-] Cannot open webcam")
+            print("[VIDEO] Cannot open webcam")
             self.running = False
             return
 
@@ -88,52 +82,52 @@ class VideoCapture:
                     time.sleep(0.01)
                     continue
 
-                # Store local frame for display
+                # Store local frame for preview
                 with self.lock:
                     self.local_frame = frame.copy()
 
                 # Encode JPEG
-                ok, enc = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
+                ok, enc = cv2.imencode('.jpg', frame, 
+                                      [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
                 if not ok:
                     continue
+                    
                 payload = enc.tobytes()
                 total_len = len(payload)
-
-                # Split into chunks
                 total_pkts = (total_len + CHUNK_SIZE - 1) // CHUNK_SIZE
                 offset = 0
-                # Uncomment for detailed debugging:
-                # if frame_id % 30 == 0:
-                #     print(f"[VIDEO] Sending frame {frame_id} to server ({total_pkts} packets)")
+                
+                # Send chunks
                 for pkt_idx in range(total_pkts):
-                    chunk = payload[offset: offset+CHUNK_SIZE]
+                    chunk = payload[offset:offset+CHUNK_SIZE]
                     offset += CHUNK_SIZE
                     hdr = struct.pack(HDR_BASE_FMT, frame_id, total_pkts, pkt_idx, len(chunk))
-                    # Prepend username to packet
+                    
+                    # Prepend username
                     username_bytes = self.username.encode('utf-8')
                     username_header = struct.pack('!H', len(username_bytes)) + username_bytes
                     packet = username_header + hdr + chunk
+                    
                     try:
                         sock.sendto(packet, self.server_address)
                     except Exception as e:
                         print(f"[VIDEO] Send error: {e}")
                 
                 frame_id = (frame_id + 1) & 0xFFFFFFFFFFFFFFFF
-                time.sleep(0.01)  # Small throttle
+                time.sleep(0.033)  # ~30 FPS
                 
         except Exception as e:
             print(f"[VIDEO] Sender error: {e}")
         finally:
             sock.close()
-            print("[VIDEO] UDP sender thread exiting")
     
     def udp_receiver_thread(self):
-        """Receive UDP packets, reassemble frames, store in remote_frames"""
+        """Receive video from server (all other users)"""
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(('0.0.0.0', VIDEO_PORT))
         sock.settimeout(0.5)
-        print("[VIDEO] UDP receiver listening on port", VIDEO_PORT)
+        print("[VIDEO] Receiver listening on port", VIDEO_PORT)
 
         try:
             while self.running:
@@ -149,7 +143,8 @@ class VideoCapture:
                             frames.pop(fid, None)
                     continue
                 except Exception as e:
-                    print(f"[VIDEO] Receive error: {e}")
+                    if self.running:
+                        print(f"[VIDEO] Receive error: {e}")
                     break
 
                 if len(packet) < HDR_BASE_SIZE + 2:
@@ -160,9 +155,12 @@ class VideoCapture:
                 if len(packet) < 2 + username_len + HDR_BASE_SIZE:
                     continue
                     
-                username_bytes = packet[2:2+username_len]
-                username = username_bytes.decode('utf-8')
-                    
+                username = packet[2:2+username_len].decode('utf-8')
+                
+                # CRITICAL: Skip our own video feed (Zoom behavior)
+                if username == self.username:
+                    continue
+                
                 hdr = packet[2+username_len:2+username_len+HDR_BASE_SIZE]
                 try:
                     frame_id, total_pkts, pkt_idx, payload_len = struct.unpack(HDR_BASE_FMT, hdr)
@@ -171,7 +169,7 @@ class VideoCapture:
                     
                 chunk = packet[2+username_len+HDR_BASE_SIZE:2+username_len+HDR_BASE_SIZE+payload_len]
 
-                # Initialize frame tracking for user
+                # Track frame assembly
                 if username not in self.frames_in_progress:
                     self.frames_in_progress[username] = {}
                     
@@ -190,43 +188,39 @@ class VideoCapture:
                     info['received'] += 1
                     info['last_time'] = time.time()
 
-                # If complete frame
+                # Complete frame?
                 if info['received'] == info['total']:
-                    # Reassemble
                     parts = [info['parts'].get(i, b'') for i in range(info['total'])]
                     payload = b''.join(parts)
                     try:
-                        # Decode JPEG
                         nparr = np.frombuffer(payload, dtype=np.uint8)
                         frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                         if frame is not None:
-                            # Store in remote frames using actual username
                             with self.lock:
                                 self.remote_frames[username] = frame
                                 self.received_frame_count += 1
-                                if self.received_frame_count % 60 == 1 or len(self.remote_frames) != 1:  # Print first frame or when user count changes
-                                    print(f"[VIDEO] ✓ Total frames received: {self.received_frame_count}, Users visible: {list(self.remote_frames.keys())}")
+                                # Debug print
+                                if self.received_frame_count % 90 == 1:
+                                    print(f"[VIDEO] ✓ Frames: {self.received_frame_count}, "
+                                          f"Users visible: {list(self.remote_frames.keys())}")
                     except Exception as e:
                         print(f"[VIDEO] Decode error: {e}")
-                    # Remove completed frame
                     frames.pop(frame_id, None)
                     
         except Exception as e:
             print(f"[VIDEO] Receiver error: {e}")
         finally:
             sock.close()
-            print("[VIDEO] UDP receiver thread exiting")
-    
     
     def get_local_frame(self):
-        """Get local camera frame"""
+        """Get local camera preview"""
         with self.lock:
             if self.local_frame is not None:
                 return self.local_frame.copy()
             return None
     
     def get_remote_frames(self):
-        """Get all remote video frames"""
+        """Get all remote video frames (other users only)"""
         with self.lock:
             return self.remote_frames.copy()
     
@@ -235,4 +229,4 @@ class VideoCapture:
         self.running = False
         if self.capture:
             self.capture.release()
-        print("[VIDEO] Video capture stopped")
+        print("[VIDEO] Stopped")

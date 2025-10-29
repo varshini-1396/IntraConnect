@@ -14,7 +14,8 @@ sys.path.append('..')
 from common.config import VIDEO_PORT, CLIENT_VIDEO_PORT, VIDEO_WIDTH, VIDEO_HEIGHT, VIDEO_FPS
 
 # UDP Streaming Configuration
-CHUNK_SIZE = 60000
+# Keep UDP packets well under typical MTU (~1500) to avoid fragmentation loss
+CHUNK_SIZE = 1200
 FRAME_TIMEOUT = 2.0
 JPEG_QUALITY = 70
 

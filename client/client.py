@@ -77,12 +77,17 @@ class CollaborationClient:
             # Wait for response
             msg_type, data = receive_message(self.socket)
             if msg_type == MSG_USER_LIST:
+                # Adopt server-assigned unique username (prevents name collisions in media)
+                assigned = data.get('username')
+                if assigned and assigned != self.username:
+                    print(f"[CLIENT] Assigned username from server: {assigned}")
+                    self.username = assigned
                 print(f"[CLIENT] Connected to server. Users online: {data['users']}")
                 self.connected = True
                 
-                # Initialize modules
-                self.video_capture = VideoCapture(username)
-                self.audio_capture = AudioCapture(username)
+                # Initialize modules with the final assigned username
+                self.video_capture = VideoCapture(self.username)
+                self.audio_capture = AudioCapture(self.username)
                 self.screen_capture = ScreenCapture()
                 self.chat_client = ChatClient(self.socket, self.on_chat_message)
                 self.file_client = FileClient(self.socket)

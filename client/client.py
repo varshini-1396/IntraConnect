@@ -58,6 +58,8 @@ class CollaborationClient:
         
         # Lock for socket operations
         self.socket_lock = threading.Lock()
+        # Flag to pause generic receiver during file transfers
+        self._in_file_transfer = threading.Event()
     
     def connect(self, username, server_ip):
         """Connect to server"""
@@ -104,6 +106,11 @@ class CollaborationClient:
         """Receive messages from server"""
         while self.running:
             try:
+                # If a file transfer is in progress, yield to it
+                if self._in_file_transfer.is_set():
+                    threading.Event().wait(0.05)
+                    continue
+                
                 msg_type, data = receive_message(self.socket)
                 
                 if not msg_type:
@@ -116,6 +123,15 @@ class CollaborationClient:
                 elif msg_type == MSG_USER_LIST:
                     users = data.get('users', [])
                     print(f"[CLIENT] Users online: {users}")
+                    # Prune any stale remote videos immediately on user list update
+                    if self.video_capture:
+                        try:
+                            allowed = set(users)
+                            if self.username in allowed:
+                                allowed.remove(self.username)
+                            self.video_capture.prune_users(allowed)
+                        except Exception:
+                            pass
                 
                 elif msg_type == MSG_FILE_INFO:
                     # Check if it's an error or file availability notification
@@ -320,9 +336,12 @@ class CollaborationClient:
     
     def upload_file(self, filepath):
         """Upload file to server - Thread-safe"""
+        self._in_file_transfer.set()
         try:
             print(f"[CLIENT] Starting file upload: {filepath}")
-            success, message = self.file_client.upload_file(filepath)
+            # Ensure exclusive access to the socket and pause receiver
+            with self.socket_lock:
+                success, message = self.file_client.upload_file(filepath)
             print(f"[CLIENT] Upload result: {message}")
             return success
         except Exception as e:
@@ -330,12 +349,17 @@ class CollaborationClient:
             import traceback
             traceback.print_exc()
             return False
+        finally:
+            self._in_file_transfer.clear()
     
     def download_file(self, file_id, save_path):
         """Download file from server - Thread-safe"""
+        self._in_file_transfer.set()
         try:
             print(f"[CLIENT] Starting file download: {file_id}")
-            success, message = self.file_client.download_file(file_id, save_path)
+            # Ensure exclusive access to the socket and pause receiver
+            with self.socket_lock:
+                success, message = self.file_client.download_file(file_id, save_path)
             print(f"[CLIENT] Download result: {message}")
             return success, message
         except Exception as e:
@@ -343,6 +367,8 @@ class CollaborationClient:
             import traceback
             traceback.print_exc()
             return False, str(e)
+        finally:
+            self._in_file_transfer.clear()
     
     def disconnect(self):
         """Disconnect from server"""

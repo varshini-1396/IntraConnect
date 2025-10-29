@@ -505,7 +505,21 @@ class CollaborationGUI:
                 canvas_height = self.screen_canvas.winfo_height()
                 
                 if canvas_width > 1 and canvas_height > 1:
-                    frame_resized = cv2.resize(frame, (canvas_width, canvas_height))
+                    # Preserve aspect ratio while fitting inside canvas
+                    fh, fw = frame.shape[:2]
+                    if fw == 0 or fh == 0:
+                        return
+                    aspect = fw / fh
+                    target_w, target_h = canvas_width, canvas_height
+                    if target_w / target_h > aspect:
+                        # Limited by height
+                        new_h = target_h
+                        new_w = int(new_h * aspect)
+                    else:
+                        # Limited by width
+                        new_w = target_w
+                        new_h = int(new_w / aspect)
+                    frame_resized = cv2.resize(frame, (new_w, new_h))
                     frame_rgb = cv2.cvtColor(frame_resized, cv2.COLOR_BGR2RGB)
                     
                     img = Image.fromarray(frame_rgb)
@@ -522,6 +536,12 @@ class CollaborationGUI:
                     else:
                         self.screen_canvas.itemconfig(self.screen_canvas.screen_image_id, image=photo)
                     
+                    # Center the image
+                    self.screen_canvas.coords(
+                        self.screen_canvas.screen_image_id,
+                        (canvas_width - frame_resized.shape[1]) // 2,
+                        (canvas_height - frame_resized.shape[0]) // 2
+                    )
                     self.screen_canvas.image = photo
                     self._screen_cleared = False
             else:

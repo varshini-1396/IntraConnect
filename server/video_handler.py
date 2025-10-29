@@ -9,7 +9,7 @@ import struct
 import time
 import cv2
 import numpy as np
-from common.config import VIDEO_PORT
+from common.config import VIDEO_PORT, CLIENT_VIDEO_PORT
 
 # UDP Streaming Configuration
 CHUNK_SIZE = 60000
@@ -211,7 +211,8 @@ class VideoHandler:
                                     packet = username_header + hdr + chunk
                                     
                                     try:
-                                        self.video_socket.sendto(packet, (client_addr[0], VIDEO_PORT))
+                                        # Send to client's listening video port to avoid same-host conflicts
+                                        self.video_socket.sendto(packet, (client_addr[0], CLIENT_VIDEO_PORT))
                                     except Exception as e:
                                         if broadcast_count % 150 == 1:
                                             print(f"[VIDEO] Send error ({sender_username} → {receiver_username}): {e}")

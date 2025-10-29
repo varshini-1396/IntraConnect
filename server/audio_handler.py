@@ -6,7 +6,7 @@ import socket
 import threading
 import struct
 import numpy as np
-from common.config import AUDIO_PORT, BUFFER_SIZE
+from common.config import AUDIO_PORT, CLIENT_AUDIO_PORT, BUFFER_SIZE
 
 class AudioHandler:
     def __init__(self, session_manager, host='0.0.0.0'):
@@ -98,7 +98,8 @@ class AudioHandler:
                             user_mixed = self.mix_audio_except(username)
                             if user_mixed is not None:
                                 try:
-                                    self.audio_socket.sendto(user_mixed, (client_addr[0], AUDIO_PORT))
+                                    # Send to client's listening audio port to avoid same-host conflicts
+                                    self.audio_socket.sendto(user_mixed, (client_addr[0], CLIENT_AUDIO_PORT))
                                 except Exception:
                                     pass
                 

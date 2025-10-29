@@ -180,7 +180,7 @@ class FileHandler:
         
         print(f"[FILE] Broadcasting file availability: {filename}")
         
-        sockets = self.session_manager.get_all_sockets_except(uploader)
+        sockets = self.session_manager.get_all_sockets_except()
         for username, sock in sockets:
             try:
                 send_message(sock, MSG_FILE_INFO, file_data)

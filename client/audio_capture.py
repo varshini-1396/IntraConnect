@@ -12,7 +12,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from common.config import AUDIO_PORT, AUDIO_CHUNK, AUDIO_FORMAT, AUDIO_CHANNELS, AUDIO_RATE, BUFFER_SIZE
+from common.config import AUDIO_PORT, CLIENT_AUDIO_PORT, AUDIO_CHUNK, AUDIO_FORMAT, AUDIO_CHANNELS, AUDIO_RATE, BUFFER_SIZE
 
 class AudioCapture:
     def __init__(self, username):
@@ -74,7 +74,8 @@ class AudioCapture:
             # UDP socket
             self.audio_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             self.audio_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.audio_socket.bind(('0.0.0.0', AUDIO_PORT))
+            # Bind to client audio port to avoid conflict with server on same host
+            self.audio_socket.bind(('0.0.0.0', CLIENT_AUDIO_PORT))
             self.server_address = (server_ip, AUDIO_PORT)
             
             self.running = True

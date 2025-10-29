@@ -266,6 +266,20 @@ class CollaborationGUI:
         self.chat_input.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, ipady=8, padx=(0, 5))
         self.chat_input.bind('<Return>', lambda e: self.send_chat_message())
         
+        # Attach file icon button (WhatsApp-style)
+        attach_btn = tk.Button(
+            chat_input_frame,
+            text="📎",
+            command=self.upload_file,
+            bg=self.colors['bg_light'],
+            fg=self.colors['text_light'],
+            font=('Segoe UI', 12, 'bold'),
+            bd=0,
+            width=3,
+            cursor='hand2'
+        )
+        attach_btn.pack(side=tk.RIGHT, padx=(0,5))
+
         send_btn = tk.Button(
             chat_input_frame,
             text="➤",
@@ -586,6 +600,8 @@ class CollaborationGUI:
         self.chat_display.insert(tk.END, f"[{timestamp}] ", "timestamp")
         self.chat_display.insert(tk.END, f"{prefix}: ", color_tag)
         self.chat_display.insert(tk.END, f"{message}\n")
+        # Slight separation between messages
+        self.chat_display.insert(tk.END, "\n")
         self.chat_display.see(tk.END)
         self.chat_display.config(state=tk.DISABLED)
     

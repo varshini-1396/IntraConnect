@@ -108,14 +108,15 @@ class CollaborationServer:
             msg_type, data = receive_message(client_socket)
             
             if msg_type == MSG_CONNECT:
-                username = data.get('username', 'Unknown')
+                requested = data.get('username', 'Unknown')
                 
-                # Add user to session
-                self.session_manager.add_user(username, client_socket, address)
+                # Add user to session (may adjust to unique username)
+                assigned_username = self.session_manager.add_user(requested, client_socket, address)
+                username = assigned_username
                 
-                # Send user list
+                # Send user list + assigned username back to this client
                 user_list = self.session_manager.get_user_list()
-                send_message(client_socket, MSG_USER_LIST, {'users': user_list})
+                send_message(client_socket, MSG_USER_LIST, {'users': user_list, 'username': assigned_username})
                 
                 # Broadcast updated user list to all
                 self.broadcast_user_list()
@@ -134,20 +135,13 @@ class CollaborationServer:
                         self.chat_handler.handle_chat_message(username, data['message'])
                     
                     elif msg_type == MSG_FILE_INFO:
-                        # Handle file upload in separate thread
-                        threading.Thread(
-                            target=self._handle_file_upload,
-                            args=(username, client_socket, data),
-                            daemon=True
-                        ).start()
+                        # Handle file upload synchronously on this connection to avoid races
+                        self._handle_file_upload(username, client_socket, data)
                     
                     elif msg_type == MSG_FILE_REQUEST:
                         file_id = data.get('file_id')
-                        threading.Thread(
-                            target=self.file_handler.handle_file_download,
-                            args=(username, client_socket, file_id),
-                            daemon=True
-                        ).start()
+                        # Handle file download synchronously to avoid races
+                        self.file_handler.handle_file_download(username, client_socket, file_id)
                     
                     elif msg_type == MSG_SCREEN_START:
                         success, message = self.screen_handler.start_sharing(username)

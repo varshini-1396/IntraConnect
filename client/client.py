@@ -122,6 +122,11 @@ class CollaborationClient:
                 
                 elif msg_type == MSG_USER_LIST:
                     users = data.get('users', [])
+                    # Update assigned username if server adjusted it
+                    assigned = data.get('username')
+                    if assigned and assigned != self.username:
+                        print(f"[CLIENT] Assigned username: {assigned}")
+                        self.username = assigned
                     print(f"[CLIENT] Users online: {users}")
                     # Prune any stale remote videos immediately on user list update
                     if self.video_capture:

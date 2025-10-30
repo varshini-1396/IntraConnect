@@ -35,7 +35,9 @@ class IntraConnectServer:
         self.udp_audio_socket.bind((self.host, self.udp_audio_port))
         
         # Client management
-        self.clients = {}  # {username: {'tcp': socket, 'addr': (ip, port), 'udp': (ip, port)}}
+        # {username: {'tcp': socket, 'addr': (ip, port), 'udp_ip': str, 'udp_port': int}}
+        self.clients = {}
+        
         self.client_lock = threading.Lock()
         
         # Screen sharing
@@ -129,14 +131,24 @@ class IntraConnectServer:
             msg_type, data = self.decode_message(msg_data)
             
             if msg_type == 'CONNECT':
-                username = data['username']
-                udp_port = data.get('udp_port', 0)
-                
+                username = data.get('username')
+                udp_port = int(data.get('udp_port', 0))
+                if not username:
+                    return
                 with self.client_lock:
+                    if username in self.clients:
+                        try:
+                            err = self.encode_message('ERROR', {'message': 'Username already in use'})
+                            if err:
+                                client_socket.sendall(err)
+                        except:
+                            pass
+                        return
                     self.clients[username] = {
                         'tcp': client_socket,
                         'addr': address,
-                        'udp': (address[0], udp_port)
+                        'udp_ip': address[0],
+                        'udp_port': udp_port,
                     }
                 
                 print(f"[+] {username} connected from {address[0]}")
@@ -268,18 +280,24 @@ class IntraConnectServer:
                 
                 username = parts[1].decode('utf-8')
                 
-                # Update UDP address
+                # Update sender IP but keep their announced UDP port, so receivers always use the port they bound
                 with self.client_lock:
                     if username in self.clients:
-                        self.clients[username]['udp'] = addr
+                        # Keep port from CONNECT; refresh IP in case it changed (e.g., multi-NIC)
+                        self.clients[username]['udp_ip'] = addr[0]
                         
-                        # Broadcast to all except sender
+                        fwd_count = 0
                         for user, info in self.clients.items():
-                            if user != username and info['udp'][1] > 0:
+                            if user != username and info.get('udp_port', 0) > 0:
+                                dest = (info.get('udp_ip', info['addr'][0]), info['udp_port'])
                                 try:
-                                    self.udp_video_socket.sendto(data, info['udp'])
+                                    self.udp_video_socket.sendto(data, dest)
+                                    fwd_count += 1
                                 except:
                                     pass
+                        # Optional lightweight debug
+                        if fwd_count:
+                            print(f"[UDP-VIDEO] {username} -> {fwd_count} clients")
             except:
                 pass
     
@@ -297,18 +315,22 @@ class IntraConnectServer:
                 
                 username = parts[1].decode('utf-8')
                 
-                # Update UDP address
+                # Update sender IP but keep their announced UDP port
                 with self.client_lock:
                     if username in self.clients:
-                        self.clients[username]['udp'] = addr
+                        self.clients[username]['udp_ip'] = addr[0]
                         
-                        # Broadcast to all except sender
+                        fwd_count = 0
                         for user, info in self.clients.items():
-                            if user != username and info['udp'][1] > 0:
+                            if user != username and info.get('udp_port', 0) > 0:
+                                dest = (info.get('udp_ip', info['addr'][0]), info['udp_port'])
                                 try:
-                                    self.udp_audio_socket.sendto(data, info['udp'])
+                                    self.udp_audio_socket.sendto(data, dest)
+                                    fwd_count += 1
                                 except:
                                     pass
+                        if fwd_count:
+                            print(f"[UDP-AUDIO] {username} -> {fwd_count} clients")
             except:
                 pass
     

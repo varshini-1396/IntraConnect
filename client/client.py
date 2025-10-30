@@ -452,6 +452,27 @@ class IntraConnectClient:
                         pass
         return None
 
+    def _encode_frame_for_udp(self, frame, target_max=60000):
+        """Encode frame as JPEG with size under target_max bytes by scaling/quality reduction."""
+        try:
+            h, w = frame.shape[:2]
+            # Start with small size to avoid fragmentation
+            target_sizes = [(320, 240), (288, 216), (256, 192)]
+            qualities = [60, 50, 40, 35, 30]
+            for (tw, th) in target_sizes:
+                resized = cv2.resize(frame, (tw, th)) if (w, h) != (tw, th) else frame
+                for q in qualities:
+                    ok, buf = cv2.imencode('.jpg', resized, [cv2.IMWRITE_JPEG_QUALITY, q])
+                    if ok:
+                        data = buf.tobytes()
+                        if len(data) <= target_max:
+                            return data
+            # Fallback: return smallest we produced even if larger
+            ok, buf = cv2.imencode('.jpg', cv2.resize(frame, (256, 192)), [cv2.IMWRITE_JPEG_QUALITY, 30])
+            return buf.tobytes() if ok else None
+        except:
+            return None
+
     def switch_panel(self, panel_name):
         for name, panel in self.panels.items():
             if str(panel.winfo_manager()):
@@ -511,16 +532,14 @@ class IntraConnectClient:
         while self.video_on:
             ret, frame = self.video_cap.read()
             if ret:
-                # Compress
-                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 60])
-                compressed = buffer.tobytes()
-                
-                # Send via UDP
-                packet = f"VIDEO_FRAME:{self.username}:".encode() + compressed
-                try:
-                    self.udp_socket.sendto(packet, (self.server_ip, 5556))
-                except:
-                    pass
+                # Encode to safe UDP-sized JPEG (<60KB)
+                compressed = self._encode_frame_for_udp(frame)
+                if compressed:
+                    packet = f"VIDEO_FRAME:{self.username}:".encode() + compressed
+                    try:
+                        self.udp_socket.sendto(packet, (self.server_ip, 5556))
+                    except:
+                        pass
                 
                 # Display own video
                 self.update_video(0, frame)
@@ -928,6 +947,34 @@ class IntraConnectClient:
         
         elif msg_type == 'CHAT':
             self.root.after(0, lambda: self.add_chat_msg(data['username'], data['message']))
+        
+        elif msg_type == 'VIDEO_FRAME':
+            try:
+                username = data.get('username')
+                frame_b64 = data.get('frame')
+                if not username or not frame_b64:
+                    return
+                frame_data = base64.b64decode(frame_b64)
+                nparr = np.frombuffer(frame_data, np.uint8)
+                frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                if frame is None:
+                    return
+                # Ensure slot exists
+                slot = self.username_to_slot.get(username)
+                if slot is None:
+                    for s in range(1, len(self.video_displays)):
+                        if s not in self.username_to_slot.values():
+                            self.username_to_slot[username] = s
+                            try:
+                                self.video_displays[s]['name'].configure(text=username)
+                            except:
+                                pass
+                            slot = s
+                            break
+                if slot is not None:
+                    self.root.after(0, lambda s=slot, f=frame, u=username: self.update_video(s, f, u))
+            except:
+                pass
         
         elif msg_type == 'FILE_INFO':
             self.root.after(0, lambda: self.add_file_item(data))

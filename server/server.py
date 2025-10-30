@@ -254,6 +254,20 @@ class IntraConnectServer:
                 msg = self.encode_message('SCREEN_FRAME', {'frame': data['frame']})
                 self.broadcast_tcp(msg, exclude_user=sender)
         
+        elif msg_type == 'VIDEO_FRAME':
+            # Relay compressed video frame over TCP to all except sender
+            try:
+                frame_b64 = data.get('frame')
+                if not frame_b64:
+                    return
+                msg = self.encode_message('VIDEO_FRAME', {
+                    'username': sender,
+                    'frame': frame_b64
+                })
+                self.broadcast_tcp(msg, exclude_user=sender)
+            except Exception as e:
+                print(f"[ERROR] VIDEO_FRAME relay: {e}")
+        
         elif msg_type == 'VIDEO_STOP':
             print(f"[VIDEO] {sender} stopped video")
             msg = self.encode_message('VIDEO_STOP', {'username': sender})

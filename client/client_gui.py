@@ -54,9 +54,10 @@ class CollaborationGUI:
         # Initialize UI
         self.create_ui()
         
-        # Start UI update thread
+        # Start UI update loop on main thread
         self.running = True
-        threading.Thread(target=self.update_ui_thread, daemon=True).start()
+        self._ui_job = None
+        self.start_ui_loop()
     
     def create_ui(self):
         """Create the UI (same as before)"""
@@ -187,10 +188,11 @@ class CollaborationGUI:
         video_canvas_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         video_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        self.video_grid.bind(
-            "<Configure>",
-            lambda e: video_canvas_widget.configure(scrollregion=video_canvas_widget.bbox("all"))
-        )
+        def _on_video_grid_configure(e):
+            video_canvas_widget.configure(scrollregion=video_canvas_widget.bbox("all"))
+            # Recompute layout responsively
+            self.reorganize_video_grid()
+        self.video_grid.bind("<Configure>", _on_video_grid_configure)
         
         # Screen sharing section
         screen_header = tk.Frame(left_panel, bg=self.colors['card_bg'], height=40)
@@ -371,26 +373,26 @@ class CollaborationGUI:
         except Exception:
             pass
     
-    def update_ui_thread(self):
-        """Continuously update UI"""
-        last_update = time.time()
-        
-        while self.running:
-            try:
-                current_time = time.time()
-                elapsed = current_time - last_update
-                
-                if elapsed >= 0.066:  # ~15 FPS
-                    self.root.after(0, self.update_video_displays)
-                    self.root.after(0, self.update_screen_display)
-                    last_update = current_time
-                
-                time.sleep(0.033)
-                
-            except Exception as e:
-                if self.running:
-                    print(f"[GUI] Update error: {e}")
-                time.sleep(0.1)
+    def start_ui_loop(self):
+        """Schedule periodic UI updates on Tk main thread"""
+        try:
+            if not self.running:
+                return
+            self.update_video_displays()
+            self.update_screen_display()
+        finally:
+            if self.running:
+                # ~15 FPS
+                self._ui_job = self.root.after(66, self.start_ui_loop)
+    
+    def stop_ui_loop(self):
+        """Cancel scheduled UI updates"""
+        try:
+            if hasattr(self, '_ui_job') and self._ui_job is not None:
+                self.root.after_cancel(self._ui_job)
+                self._ui_job = None
+        except Exception:
+            pass
     
     def update_video_displays(self):
         """Update video displays - FIXED for Zoom-like behavior"""
@@ -454,7 +456,7 @@ class CollaborationGUI:
     def create_video_canvas(self, username):
         """Create video canvas for a user"""
         num_users = len(self.video_canvases)
-        cols = 3
+        cols = self._compute_video_cols()
         row = num_users // cols
         col = num_users % cols
         
@@ -509,12 +511,28 @@ class CollaborationGUI:
     def reorganize_video_grid(self):
         """Reorganize video grid"""
         users = list(self.video_canvases.keys())
-        cols = 3
-        
+        cols = self._compute_video_cols()
         for i, username in enumerate(users):
             row = i // cols
             col = i % cols
-            self.video_frames[username].grid(row=row, column=col)
+            self.video_frames[username].grid(row=row, column=col, sticky='nsew')
+        # Ensure grid weights for current rows/cols
+        total_rows = (len(users) + cols - 1) // cols
+        for r in range(total_rows):
+            self.video_grid.grid_rowconfigure(r, weight=1)
+        for c in range(cols):
+            self.video_grid.grid_columnconfigure(c, weight=1)
+
+    def _compute_video_cols(self):
+        """Compute responsive number of columns based on available width"""
+        try:
+            grid_w = max(1, self.video_grid.winfo_width())
+        except Exception:
+            grid_w = 960
+        # Approx tile width incl padding
+        tile_w = 360  # 320 canvas + paddings
+        cols = max(1, min(4, grid_w // tile_w))
+        return cols
     
     def update_screen_display(self):
         """Update screen sharing display"""
@@ -730,6 +748,7 @@ class CollaborationGUI:
     def disconnect(self):
         if messagebox.askyesno("Disconnect", "Disconnect?"):
             self.running = False
+            self.stop_ui_loop()
             self.client.disconnect()
             self.root.quit()
     

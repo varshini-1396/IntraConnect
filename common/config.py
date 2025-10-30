@@ -1,0 +1,52 @@
+"""
+Configuration file for LAN Collaboration System
+Contains all network and application constants
+"""
+
+# Network Configuration
+SERVER_HOST = '0.0.0.0'  # Listen on all interfaces
+DEFAULT_PORT = 5555
+VIDEO_PORT = 5556          # Server receives client video on this UDP port
+AUDIO_PORT = 5557          # Server receives client audio on this UDP port
+
+# To allow running server and client on the same machine, clients listen on
+# different UDP ports than the server. This avoids bind conflicts on Windows.
+CLIENT_VIDEO_PORT = VIDEO_PORT + 1  # Clients receive video on this port
+CLIENT_AUDIO_PORT = AUDIO_PORT + 1  # Clients receive audio on this port
+
+BUFFER_SIZE = 65536
+
+# Video Configuration - Optimized for UDP streaming
+VIDEO_WIDTH = 640
+VIDEO_HEIGHT = 480
+VIDEO_FPS = 20  # Higher FPS for smooth UDP streaming
+VIDEO_QUALITY = 70  # Good quality for UDP streaming
+
+# Audio Configuration
+AUDIO_CHUNK = 1024
+AUDIO_FORMAT = 8  # pyaudio.paInt16
+AUDIO_CHANNELS = 1
+AUDIO_RATE = 44100
+
+# Protocol Message Types
+MSG_CONNECT = "CONNECT"
+MSG_DISCONNECT = "DISCONNECT"
+MSG_CHAT = "CHAT"
+MSG_FILE_INFO = "FILE_INFO"
+MSG_FILE_DATA = "FILE_DATA"
+MSG_FILE_REQUEST = "FILE_REQUEST"
+MSG_SCREEN_START = "SCREEN_START"
+MSG_SCREEN_STOP = "SCREEN_STOP"
+MSG_SCREEN_FRAME = "SCREEN_FRAME"
+MSG_USER_LIST = "USER_LIST"
+MSG_VIDEO_STREAM = "VIDEO"
+MSG_AUDIO_STREAM = "AUDIO"
+
+# File Transfer
+MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
+FILE_CHUNK_SIZE = 8192
+
+# UI Configuration
+WINDOW_TITLE = "LAN Collaboration System"
+WINDOW_WIDTH = 1200
+WINDOW_HEIGHT = 800

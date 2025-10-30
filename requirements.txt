@@ -1,0 +1,24 @@
+# LAN Collaboration System - Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# Computer Vision & Image Processing
+opencv-python>=4.8.0
+Pillow>=10.0.0
+numpy>=1.24.0
+
+# Audio Processing
+pyaudio>=0.2.13
+
+# Note: If pyaudio installation fails on Windows, try:
+# pip install pipwin
+# pipwin install pyaudio
+
+# Note: On Linux, you may need to install PortAudio first:
+# sudo apt-get install portaudio19-dev python3-pyaudio
+
+# All other dependencies (socket, threading, tkinter, etc.) 
+# are part of Python's standard library
+
+# Python Version Compatibility:
+# - Python 3.8 - 3.11: All versions work
+# - Python 3.12+: Use >= versions above (will auto-install compatible versions)

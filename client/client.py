@@ -57,6 +57,7 @@ class IntraConnectClient:
         # Video displays
         self.video_displays = []
         self.received_videos = {}
+        self.username_to_slot = {}
         
         # File tracking
         self.file_items = {}
@@ -77,6 +78,8 @@ class IntraConnectClient:
         self.panels = {}
         self.screen_popup = None
         self.screen_popup_label = None
+        self._pending_users = None
+        self._ui_ready = False
         
         self.setup_login_screen()
     
@@ -255,8 +258,8 @@ class IntraConnectClient:
         video_grid = ctk.CTkFrame(video_panel, corner_radius=12, fg_color="#1a1a1a")
         video_grid.pack(fill="both", expand=True)
         
-        for i in range(6):
-            row, col = i // 3, i % 3
+        for i in range(12):
+            row, col = i // 4, i % 4
             tile = ctk.CTkFrame(video_grid, corner_radius=8, border_width=0, fg_color="#2a2a2a")
             tile.grid(row=row, column=col, padx=8, pady=8, sticky="nsew")
             label = ctk.CTkLabel(
@@ -281,9 +284,9 @@ class IntraConnectClient:
                 'video_active': False,
                 'speaking': False
             })
-        for i in range(3):
+        for i in range(4):
             video_grid.grid_columnconfigure(i, weight=1)
-        for i in range(2):
+        for i in range(3):
             video_grid.grid_rowconfigure(i, weight=1)
         
         chat_panel = ctk.CTkFrame(content, corner_radius=12, fg_color="transparent")
@@ -376,6 +379,14 @@ class IntraConnectClient:
         
         self.switch_panel('video')
         self.add_chat_msg("System", "Connected to IntraConnect server!", "#00ff88")
+        self._ui_ready = True
+        # Apply any buffered user list
+        if self._pending_users is not None:
+            try:
+                self.update_users(self._pending_users)
+            except:
+                pass
+            self._pending_users = None
     
     # Media controls
     def toggle_video(self):
@@ -404,6 +415,42 @@ class IntraConnectClient:
         else:
             self.stop_screen()
             self.screen_btn.configure(text="🖥️ Share OFF", fg_color="#444")
+
+    def _open_camera(self):
+        """Try to open a camera device reliably on Windows by testing multiple backends and indices."""
+        backends = [
+            getattr(cv2, 'CAP_DSHOW', 700),
+            getattr(cv2, 'CAP_MSMF', 1400),
+            getattr(cv2, 'CAP_ANY', 0),
+        ]
+        indices = [0, 1, 2]
+        for backend in backends:
+            for idx in indices:
+                try:
+                    cap = cv2.VideoCapture(idx, backend)
+                    if not cap or not cap.isOpened():
+                        if cap:
+                            cap.release()
+                        continue
+                    # Prefer MJPG for faster CPU encode if supported
+                    try:
+                        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+                    except:
+                        pass
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+                    cap.set(cv2.CAP_PROP_FPS, 15)
+                    # Validate by grabbing one frame
+                    ret, frame = cap.read()
+                    if ret and frame is not None:
+                        return cap
+                    cap.release()
+                except:
+                    try:
+                        cap.release()
+                    except:
+                        pass
+        return None
 
     def switch_panel(self, panel_name):
         for name, panel in self.panels.items():
@@ -441,17 +488,17 @@ class IntraConnectClient:
     
     # Video
     def start_video(self):
-        """Start video"""
+        """Start video with robust backend/index probing."""
         try:
-            self.video_cap = cv2.VideoCapture(0)
-            if not self.video_cap.isOpened():
-                messagebox.showerror("Error", "Cannot open camera")
+            cap = self._open_camera()
+            if not cap:
+                messagebox.showerror(
+                    "Camera Error",
+                    "Unable to access camera. Close apps using the camera (Zoom/Teams/Meet),"
+                    " ensure permissions are granted, or try a different device."
+                )
                 return False
-            
-            self.video_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
-            self.video_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
-            self.video_cap.set(cv2.CAP_PROP_FPS, 15)
-            
+            self.video_cap = cap
             self.video_on = True
             threading.Thread(target=self.video_loop, daemon=True).start()
             return True
@@ -741,6 +788,41 @@ class IntraConnectClient:
         for widget in self.users_frame.winfo_children():
             widget.destroy()
         
+        # Assign fixed slots for users
+        present = set(users)
+        # Remove mappings for users no longer present
+        for uname, slot in list(self.username_to_slot.items()):
+            if uname != self.username and uname not in present:
+                try:
+                    if self._blank_ctki:
+                        self.video_displays[slot]['label'].configure(text="📷\nCamera Off", image=self._blank_ctki)
+                    self.video_displays[slot]['name'].configure(text="")
+                except:
+                    pass
+                del self.username_to_slot[uname]
+
+        # Ensure self is at slot 0
+        self.username_to_slot[self.username] = 0
+        # Assign slots 1.. for others in deterministic order
+        next_slot = 1
+        for user in sorted(u for u in users if u != self.username):
+            if user not in self.username_to_slot:
+                # find next free slot
+                while next_slot < len(self.video_displays) and next_slot in self.username_to_slot.values():
+                    next_slot += 1
+                if next_slot < len(self.video_displays):
+                    self.username_to_slot[user] = next_slot
+                    try:
+                        self.video_displays[next_slot]['name'].configure(text=user)
+                    except:
+                        pass
+                    next_slot += 1
+            else:
+                try:
+                    self.video_displays[self.username_to_slot[user]]['name'].configure(text=user)
+                except:
+                    pass
+
         for user in users:
             frame = ctk.CTkFrame(self.users_frame, fg_color="#2a2a2a", height=35, corner_radius=6)
             frame.pack(fill="x", pady=2)
@@ -808,8 +890,20 @@ class IntraConnectClient:
                     nparr = np.frombuffer(payload, np.uint8)
                     frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
                     if frame is not None:
-                        slot = (hash(username) % 5) + 1
-                        self.update_video(slot, frame, username)
+                        slot = self.username_to_slot.get(username)
+                        if slot is None:
+                            # allocate next available slot
+                            for s in range(1, len(self.video_displays)):
+                                if s not in self.username_to_slot.values():
+                                    self.username_to_slot[username] = s
+                                    try:
+                                        self.video_displays[s]['name'].configure(text=username)
+                                    except:
+                                        pass
+                                    slot = s
+                                    break
+                        if slot is not None and slot < len(self.video_displays):
+                            self.update_video(slot, frame, username)
                 
                 elif msg_type == 'AUDIO_FRAME':
                     if self.audio_out:
@@ -826,7 +920,11 @@ class IntraConnectClient:
         data = message.get('data', {})
         
         if msg_type == 'USER_LIST':
-            self.root.after(0, lambda: self.update_users(data['users']))
+            users = data.get('users', [])
+            if not self._ui_ready:
+                self._pending_users = users
+            else:
+                self.root.after(0, lambda u=users: self.update_users(u))
         
         elif msg_type == 'CHAT':
             self.root.after(0, lambda: self.add_chat_msg(data['username'], data['message']))
@@ -850,7 +948,7 @@ class IntraConnectClient:
             def _reset_screen():
                 try:
                     if self.screen_popup_label:
-                        self.screen_popup_label.configure(text="🖥️\n\nNo screen being shared", image="")
+                        self.screen_popup_label.configure(text="🖥️\n\nNo screen being shared", image=None)
                 except:
                     pass
             self.root.after(0, _reset_screen)
@@ -867,14 +965,16 @@ class IntraConnectClient:
         
         elif msg_type == 'VIDEO_STOP':
             username = data['username']
-            slot = (hash(username) % 5) + 1
+            slot = self.username_to_slot.get(username)
             try:
-                self.video_displays[slot]['video_active'] = False
-                if self._blank_ctki:
-                    self.video_displays[slot]['label'].configure(
-                        text="📷\nCamera Off",
-                        image=self._blank_ctki
-                    )
+                if slot is not None and slot < len(self.video_displays):
+                    self.video_displays[slot]['video_active'] = False
+                    if self._blank_ctki:
+                        self.video_displays[slot]['label'].configure(
+                            text="📷\nCamera Off",
+                            image=self._blank_ctki
+                        )
+                    self.video_displays[slot]['name'].configure(text=username)
             except:
                 pass
         

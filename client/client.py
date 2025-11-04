@@ -16,8 +16,7 @@ from tkinter import filedialog, messagebox
 from PIL import Image, ImageTk
 import cv2
 import numpy as np
-import pyaudio
-import audioop
+import sounddevice as sd
 import mss
 import base64
 
@@ -45,9 +44,9 @@ class IntraConnectClient:
         
         # Media capture
         self.video_cap = None
-        self.audio = None
-        self.audio_in = None
-        self.audio_out = None
+        self.audio_stream = None
+        self.audio_out_stream = None
+        self.sample_rate = 44100
         self.screen_capturer = None
         
         # Speaking detection
@@ -571,66 +570,71 @@ class IntraConnectClient:
     def start_audio(self):
         """Start audio"""
         try:
-            self.audio = pyaudio.PyAudio()
-            self.audio_in = self.audio.open(
-                format=pyaudio.paInt16,
+            # Input stream
+            self.audio_stream = sd.InputStream(
+                samplerate=self.sample_rate,
                 channels=1,
-                rate=44100,
-                input=True,
-                frames_per_buffer=1024
-            )
-            self.audio_out = self.audio.open(
-                format=pyaudio.paInt16,
-                channels=1,
-                rate=44100,
-                output=True,
-                frames_per_buffer=1024
+                dtype='int16',
+                blocksize=1024,
+                callback=self.audio_callback
             )
             
+            # Output stream
+            self.audio_out_stream = sd.OutputStream(
+                samplerate=self.sample_rate,
+                channels=1,
+                dtype='int16',
+                blocksize=1024
+            )
+            
+            self.audio_stream.start()
+            self.audio_out_stream.start()
             self.audio_on = True
-            threading.Thread(target=self.audio_loop, daemon=True).start()
             return True
+            
         except Exception as e:
             messagebox.showerror("Error", f"Audio start failed: {e}")
             return False
     
-    def audio_loop(self):
-        """Audio streaming loop"""
-        while self.audio_on:
-            try:
-                audio_data = self.audio_in.read(1024, exception_on_overflow=False)
-                
-                # Speaking detection
-                rms = audioop.rms(audio_data, 2)
-                current_speaking = rms > self.speaking_threshold
-                
-                if current_speaking != self.is_speaking:
-                    self.is_speaking = current_speaking
-                    msg = self.encode_message('SPEAKING_STATUS', {
-                        'username': self.username,
-                        'speaking': self.is_speaking
-                    })
-                    try:
-                        self.tcp_socket.sendall(msg)
-                    except:
-                        pass
-                
-                # Send audio
-                packet = f"AUDIO_FRAME:{self.username}:".encode() + audio_data
+    def audio_callback(self, indata, frames, time, status):
+        """Callback for audio input"""
+        if not self.audio_on:
+            return
+            
+        try:
+            # Convert numpy array to bytes
+            audio_data = indata.tobytes()
+            
+            # Speaking detection
+            rms = np.sqrt(np.mean(np.square(indata))) * 1000  # Calculate RMS in millivolts
+            current_speaking = rms > self.speaking_threshold
+            
+            if current_speaking != self.is_speaking:
+                self.is_speaking = current_speaking
+                msg = self.encode_message('SPEAKING_STATUS', {
+                    'username': self.username,
+                    'speaking': current_speaking
+                })
                 try:
-                    self.udp_socket.sendto(packet, (self.server_ip, 5557))
+                    self.tcp_socket.sendall(msg)
                 except:
                     pass
-                
-                time.sleep(1024 / 44100)
+            
+            # Send audio
+            packet = f"AUDIO_FRAME:{self.username}:".encode() + audio_data
+            try:
+                self.udp_socket.sendto(packet, (self.server_ip, 5557))
             except:
                 pass
+                
+        except Exception as e:
+            print(f"Audio callback error: {e}")
     
     def stop_audio(self):
         """Stop audio"""
         self.audio_on = False
         
-        if self.is_speaking:
+        if hasattr(self, 'is_speaking') and self.is_speaking:
             msg = self.encode_message('SPEAKING_STATUS', {
                 'username': self.username,
                 'speaking': False
@@ -641,23 +645,15 @@ class IntraConnectClient:
                 pass
             self.is_speaking = False
         
-        if self.audio_in:
-            try:
-                self.audio_in.stop_stream()
-                self.audio_in.close()
-            except:
-                pass
-        if self.audio_out:
-            try:
-                self.audio_out.stop_stream()
-                self.audio_out.close()
-            except:
-                pass
-        if self.audio:
-            try:
-                self.audio.terminate()
-            except:
-                pass
+        try:
+            if hasattr(self, 'audio_stream') and self.audio_stream:
+                self.audio_stream.stop()
+                self.audio_stream.close()
+            if hasattr(self, 'audio_out_stream') and self.audio_out_stream:
+                self.audio_out_stream.stop()
+                self.audio_out_stream.close()
+        except Exception as e:
+            print(f"Error stopping audio: {e}")
     
     # Screen share
     def start_screen(self):
@@ -925,11 +921,13 @@ class IntraConnectClient:
                             self.update_video(slot, frame, username)
                 
                 elif msg_type == 'AUDIO_FRAME':
-                    if self.audio_out:
+                    if hasattr(self, 'audio_out_stream') and self.audio_out_stream and self.audio_out_stream.active:
                         try:
-                            self.audio_out.write(payload)
-                        except:
-                            pass
+                            # Convert bytes to numpy array and write to output
+                            audio_data = np.frombuffer(payload, dtype='int16')
+                            self.audio_out_stream.write(audio_data)
+                        except Exception as e:
+                            print(f"Error playing audio: {e}")
             except:
                 pass
     
@@ -1205,7 +1203,7 @@ if __name__ == "__main__":
         print("[✓] All dependencies found")
     except ImportError as e:
         print(f"\n[ERROR] Missing dependency: {e}")
-        print("\nInstall with: pip install opencv-python pyaudio pillow numpy mss customtkinter")
+        print("\nInstall with: pip install opencv-python sounddevice pillow numpy mss customtkinter")
         exit(1)
     
     print("[✓] Initializing GUI...")

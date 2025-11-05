@@ -396,9 +396,9 @@ class IntraConnectClient:
                 command=lambda p=panel: self.switch_panel(p) if panel else cmd()
             )
         
-        sidebar_btn(sidebar_buttons_frame, "📹", panel="video").pack(padx=5, pady=5)
-        sidebar_btn(sidebar_buttons_frame, "�", cmd=self.open_screen_popup).pack(padx=5, pady=5)
-        sidebar_btn(sidebar_buttons_frame, "�", panel="chat").pack(padx=5, pady=5)
+        sidebar_btn(sidebar_buttons_frame, "🎥", panel="video").pack(padx=5, pady=5)
+        sidebar_btn(sidebar_buttons_frame, "💻", cmd=self.open_screen_popup).pack(padx=5, pady=5)
+        sidebar_btn(sidebar_buttons_frame, "💬", panel="chat").pack(padx=5, pady=5)
         sidebar_btn(sidebar_buttons_frame, "📁", panel="files").pack(padx=5, pady=5)
         sidebar_btn(sidebar_buttons_frame, "👥", panel="users").pack(padx=5, pady=5)
         

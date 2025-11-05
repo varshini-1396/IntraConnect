@@ -411,6 +411,18 @@ class IntraConnectClient:
             except:
                 pass
             self.pending_users = None
+        
+        # Start audio output stream so we can hear others immediately
+        try:
+            self.audio_out_stream = sd.OutputStream(
+                samplerate=self.sample_rate,
+                channels=1,
+                dtype='int16',
+                blocksize=1024
+            )
+            self.audio_out_stream.start()
+        except Exception as e:
+            print(f"Could not start audio output: {e}")
     
     # Media controls
     
@@ -581,20 +593,11 @@ class IntraConnectClient:
                 blocksize=1024,
                 callback=self.audio_callback
             )
-            
-            # Output stream (speakers) - for playing received audio
-            self.audio_out_stream = sd.OutputStream(
-                samplerate=self.sample_rate,
-                channels=1,
-                dtype='int16',
-                blocksize=1024
-            )
-            
             self.audio_stream.start()
-            self.audio_out_stream.start()
             self.audio_on = True
             return True
         except Exception as e:
+            self.audio_on = False # Ensure state is correct on failure
             messagebox.showerror("Error", f"Audio start failed: {e}")
             return False
     
@@ -652,9 +655,6 @@ class IntraConnectClient:
             if hasattr(self, 'audio_stream') and self.audio_stream:
                 self.audio_stream.stop()
                 self.audio_stream.close()
-            if hasattr(self, 'audio_out_stream') and self.audio_out_stream:
-                self.audio_out_stream.stop()
-                self.audio_out_stream.close()
         except Exception as e:
             print(f"Error stopping audio: {e}")
     

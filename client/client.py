@@ -626,7 +626,7 @@ class IntraConnectClient:
             # Send audio via UDP
             packet = f"AUDIOFRAME:{self.username}:".encode() + audio_data
             try:
-                self.udp_socket.sendto(packet, (self.server_ip, 5557))
+                self.udp_socket.sendto(packet, (self.server_ip, 5556))
             except:
                 pass
         except Exception as e:
@@ -894,18 +894,20 @@ class IntraConnectClient:
             speaking = data['speaking']
             
             # Find user's slot
+            slot = None
             if username == self.username:
                 slot = 0
             else:
-                slot = hash(username) % 5 + 1
+                slot = self.username_to_slot.get(username)
             
-            try:
-                if speaking:
-                    self.video_displays[slot]['frame'].configure(border_width=3, border_color="#00ff88")
-                else:
-                    self.video_displays[slot]['frame'].configure(border_width=0)
-            except:
-                pass
+            if slot is not None:
+                try:
+                    if speaking:
+                        self.video_displays[slot]['frame'].configure(border_width=3, border_color="#00ff88")
+                    else:
+                        self.video_displays[slot]['frame'].configure(border_width=0)
+                except:
+                    pass
     
     # UI Updates
     

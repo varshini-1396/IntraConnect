@@ -242,6 +242,10 @@ class IntraConnectClient:
         sidebar.pack(side="left", fill="y", padx=(0, 10))
         sidebar.pack_propagate(False)
         
+        # Frame to hold sidebar buttons for vertical centering
+        sidebar_buttons_frame = ctk.CTkFrame(sidebar, fg_color="transparent")
+        sidebar_buttons_frame.pack(expand=True)
+        
         # Content area
         content = ctk.CTkFrame(main, fg_color="transparent")
         content.pack(side="left", fill="both", expand=True)
@@ -392,11 +396,11 @@ class IntraConnectClient:
                 command=lambda p=panel: self.switch_panel(p) if panel else cmd()
             )
         
-        sidebar_btn(sidebar, "📹", panel="video").pack(padx=5, pady=(10, 5))
-        sidebar_btn(sidebar, "🖥️", cmd=self.open_screen_popup).pack(padx=5, pady=5)
-        sidebar_btn(sidebar, "💬", panel="chat").pack(padx=5, pady=5)
-        sidebar_btn(sidebar, "📁", panel="files").pack(padx=5, pady=5)
-        sidebar_btn(sidebar, "👥", panel="users").pack(padx=5, pady=5)
+        sidebar_btn(sidebar_buttons_frame, "📹", panel="video").pack(padx=5, pady=5)
+        sidebar_btn(sidebar_buttons_frame, "🖥️", cmd=self.open_screen_popup).pack(padx=5, pady=5)
+        sidebar_btn(sidebar_buttons_frame, "💬", panel="chat").pack(padx=5, pady=5)
+        sidebar_btn(sidebar_buttons_frame, "📁", panel="files").pack(padx=5, pady=5)
+        sidebar_btn(sidebar_buttons_frame, "👥", panel="users").pack(padx=5, pady=5)
         
         self.switch_panel("video")
         

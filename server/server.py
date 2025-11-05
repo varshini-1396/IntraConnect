@@ -1,4 +1,3 @@
-# server.py
 """
 IntraConnect Server
 Handles all client connections and data relay for video, audio, chat, screen sharing, and file transfer
@@ -12,12 +11,13 @@ import time
 import os
 from datetime import datetime
 
+
 class IntraConnectServer:
     def __init__(self, host='0.0.0.0', tcp_port=5555, udp_video_port=5556, udp_audio_port=5557):
+        # DEPRECATED: udp_audio_port is no longer used as we unify UDP traffic
         self.host = host
         self.tcp_port = tcp_port
         self.udp_video_port = udp_video_port
-        self.udp_audio_port = udp_audio_port
         
         # TCP socket for reliable data (chat, files, screen sharing, control)
         self.tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -25,14 +25,10 @@ class IntraConnectServer:
         self.tcp_socket.bind((self.host, self.tcp_port))
         self.tcp_socket.listen(50)
         
-        # UDP sockets for streaming
+        # A single UDP socket for all streaming (video, audio)
         self.udp_video_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.udp_video_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.udp_video_socket.bind((self.host, self.udp_video_port))
-        
-        self.udp_audio_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.udp_audio_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.udp_audio_socket.bind((self.host, self.udp_audio_port))
         
         # Client management
         # {username: {'tcp': socket, 'addr': (ip, port), 'udp_ip': str, 'udp_port': int}}
@@ -62,7 +58,6 @@ class IntraConnectServer:
         print(f"   • Server IP:      {local_ip}")
         print(f"   • TCP Port:       {self.tcp_port} (Chat, Files, Screen)")
         print(f"   • UDP Video:      {self.udp_video_port}")
-        print(f"   • UDP Audio:      {self.udp_audio_port}")
         print(f"\n💡 Clients should connect to: {local_ip}:{self.tcp_port}")
         print(f"\n⏳ Waiting for connections...")
         print("="*70 + "\n")
@@ -281,48 +276,13 @@ class IntraConnectServer:
             self.broadcast_tcp(msg, exclude_user=sender)
     
     def handle_udp_video(self):
-        """Handle UDP video streams"""
+        """Handle all UDP streams (video and audio)"""
         print("[UDP] Video handler started")
         while self.running:
             try:
                 data, addr = self.udp_video_socket.recvfrom(65536)
                 
                 # Extract username from packet
-                parts = data.split(b':', 2)
-                if len(parts) < 3:
-                    continue
-                
-                username = parts[1].decode('utf-8')
-                
-                # Update sender IP but keep their announced UDP port, so receivers always use the port they bound
-                with self.client_lock:
-                    if username in self.clients:
-                        # Keep port from CONNECT; refresh IP in case it changed (e.g., multi-NIC)
-                        self.clients[username]['udp_ip'] = addr[0]
-                        
-                        fwd_count = 0
-                        for user, info in self.clients.items():
-                            if user != username and info.get('udp_port', 0) > 0:
-                                dest = (info.get('udp_ip', info['addr'][0]), info['udp_port'])
-                                try:
-                                    self.udp_video_socket.sendto(data, dest)
-                                    fwd_count += 1
-                                except:
-                                    pass
-                        # Optional lightweight debug
-                        if fwd_count:
-                            print(f"[UDP-VIDEO] {username} -> {fwd_count} clients")
-            except:
-                pass
-    
-    def handle_udp_audio(self):
-        """Handle UDP audio streams"""
-        print("[UDP] Audio handler started")
-        while self.running:
-            try:
-                data, addr = self.udp_audio_socket.recvfrom(65536)
-                
-                # Extract username
                 parts = data.split(b':', 2)
                 if len(parts) < 3:
                     continue
@@ -339,20 +299,17 @@ class IntraConnectServer:
                             if user != username and info.get('udp_port', 0) > 0:
                                 dest = (info.get('udp_ip', info['addr'][0]), info['udp_port'])
                                 try:
-                                    self.udp_audio_socket.sendto(data, dest)
+                                    self.udp_video_socket.sendto(data, dest)
                                     fwd_count += 1
                                 except:
                                     pass
-                        if fwd_count:
-                            print(f"[UDP-AUDIO] {username} -> {fwd_count} clients")
             except:
                 pass
     
     def start(self):
         """Start the server"""
-        # Start UDP handlers
+        # Start a single UDP handler for both video and audio
         threading.Thread(target=self.handle_udp_video, daemon=True).start()
-        threading.Thread(target=self.handle_udp_audio, daemon=True).start()
         
         # Accept TCP connections
         while self.running:
@@ -370,10 +327,10 @@ class IntraConnectServer:
         try:
             self.tcp_socket.close()
             self.udp_video_socket.close()
-            self.udp_audio_socket.close()
         except:
             pass
         print("\n[✓] Server stopped")
+
 
 if __name__ == "__main__":
     server = IntraConnectServer()
